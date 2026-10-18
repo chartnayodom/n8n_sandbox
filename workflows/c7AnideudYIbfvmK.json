@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-10-17T14:54:41.493Z",
+  "updatedAt": "2026-10-18T14:06:09.975Z",
   "createdAt": "2026-10-17T14:54:41.493Z",
   "id": "c7AnideudYIbfvmK",
   "name": "01 - Google Sheets Outbound Email (Service Account)",
@@ -23,8 +23,8 @@
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
-        160,
-        300
+        -144,
+        304
       ]
     },
     {
@@ -34,8 +34,8 @@
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
       "position": [
-        160,
-        140
+        -144,
+        144
       ]
     },
     {
@@ -44,11 +44,11 @@
           "string": [
             {
               "name": "admin_report_email",
-              "value": "admin@yourdomain.com"
+              "value": "baipor2545@hotmail.com"
             },
             {
               "name": "sender_email",
-              "value": "notifications@yourdomain.com"
+              "value": "baipor_insurance@hotmail.com"
             },
             {
               "name": "sheet_name",
@@ -69,8 +69,8 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 2,
       "position": [
-        380,
-        220
+        80,
+        224
       ]
     },
     {
@@ -78,13 +78,20 @@
         "authentication": "serviceAccount",
         "documentId": {
           "__rl": true,
-          "value": "",
-          "mode": "id"
+          "value": "12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo",
+          "mode": "list",
+          "cachedResultName": "automail_test",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo/edit?usp=drivesdk"
         },
         "sheetName": {
           "__rl": true,
-          "value": "Sheet1",
-          "mode": "name"
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo/edit#gid=0"
+        },
+        "filtersUI": {
+          "values": []
         },
         "options": {}
       },
@@ -93,13 +100,13 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [
-        600,
-        220
+        672,
+        224
       ],
       "credentials": {
         "googleApi": {
-          "id": "",
-          "name": "Google Service Account"
+          "id": "apU1LNQcR7cMOpnJ",
+          "name": "Google Service Account account"
         }
       }
     },
@@ -112,8 +119,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        820,
-        220
+        832,
+        224
       ]
     },
     {
@@ -125,21 +132,22 @@
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
       "position": [
-        1060,
-        220
+        1072,
+        224
       ]
     },
     {
       "parameters": {
-        "jsCode": "// 4.1-4.2 เตรียม Mail Body Template โดยใส่ \"ชื่อ\"\nconst record = $input.item.json;\nconst name = record.resolved_name;\nconst email = record.resolved_email;\nconst dueDate = record.resolved_due_date;\n\n// สร้าง Message-ID เฉพาะสำหรับใช้อ้างอิง\nconst domain = 'automail.internal';\nconst customMessageId = `<n8n-${Date.now()}-${Math.random().toString(36).substring(2, 9)}@${domain}>`;\n\nconst subject = `[แจ้งเตือนครบกำหนด] เรียน ${name} กำหนดการของท่านใกล้ครบกำหนดในอีก 3 เดือน`;\n\nconst htmlBody = `\n<div style=\"font-family: 'Sarabun', Arial, sans-serif; line-height: 1.6; color: #333;\">\n  <h2 style=\"color: #1a73e8;\">แจ้งเตือนกำหนดการ</h2>\n  <p>เรียนคุณ <strong>${name}</strong>,</p>\n  <p>ระบบขอแจ้งเตือนว่ารายการของท่านมีกำหนดครบกำหนดในวันที่: <strong>${dueDate || 'อีก 3 เดือนข้างหน้า'}</strong></p>\n  <p>หากท่านมีข้อสงสัยหรือต้องการดำเนินการต่อ สามารถตอบกลับ (Reply) อีเมลฉบับนี้ได้ทันทีครับ</p>\n  <hr style=\"border: none; border-top: 1px solid #e0e0e0; margin: 20px 0;\" />\n  <p style=\"font-size: 12px; color: #777;\">อีเมลนี้ถูกส่งโดยระบบอัตโนมัติ (Reference ID: ${customMessageId})</p>\n</div>\n`;\n\nreturn {\n  json: {\n    ...record,\n    mail_subject: subject,\n    mail_html: htmlBody,\n    generated_message_id: customMessageId\n  }\n};"
+        "mode": "runOnceForEachItem",
+        "jsCode": "// 4.1-4.2 เตรียม Mail Body Template โดยใส่ \"ชื่อ\"\nconst record = $input.item.json;\nconst name = record.resolved_name;\nconst email = record.resolved_email;\nconst dueDate = record.resolved_due_date;\n\n// สร้าง Message-ID เฉพาะสำหรับใช้อ้างอิง\nconst domain = 'automail.internal';\nconst customMessageId = `<n8n-${Date.now()}-${Math.random().toString(36).substring(2, 9)}@${domain}>`;\n\nconst subject = `[แจ้งเตือนครบกำหนด] เรียน ${name} กำหนดการของท่านใกล้ครบกำหนดในอีก 3 เดือน`;\n\nconst htmlBody = `\n<div style=\"font-family: 'Sarabun', Arial, sans-serif; line-height: 1.6; color: #333;\">\n  <h2 style=\"color: #1a73e8;\">แจ้งเตือนกำหนดการ</h2>\n  <p>เรียนคุณ <strong>${name}</strong>,</p>\n  <p>ระบบขอแจ้งเตือนว่ารายการของท่านมีกำหนดครบกำหนดในวันที่: <strong>${dueDate || 'อีก 3 เดือนข้างหน้า'}</strong></p>\n  <p>หากท่านมีข้อสงสัยหรือต้องการดำเนินการต่อ สามารถตอบกลับ (Reply) อีเมลฉบับนี้ได้ทันทีครับ</p>\n  <hr style=\"border: none; border-top: 1px solid #e0e0e0; margin: 20px 0;\" />\n  <p style=\"font-size: 12px; color: #777;\">อีเมลนี้ถูกส่งโดยระบบอัตโนมัติ (Reference ID: ${customMessageId})</p>\n</div>\n`;\n\nconst file1 = $('Download file1').first().binary?.data;\nconst file2 = $('Download file').first().binary?.data1;\nreturn {\n  json: {\n    ...record,\n    mail_subject: subject,\n    mail_html: htmlBody,\n    generated_message_id: customMessageId\n  },\n  // แนบไฟล์กลับเข้ามาใน Item เพื่อส่งต่อให้ Node Send Email\n  binary: {\n    data: file1,\n    data1: file2\n  }\n};"
       },
       "id": "e4f8d21b-3001-4b1a-9876-000000000007",
       "name": "4.1-4.2 Build Mail Template",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1300,
-        180
+        1328,
+        528
       ]
     },
     {
@@ -150,7 +158,7 @@
         "html": "={{ $json.mail_html }}",
         "options": {
           "appendAttribution": false,
-          "customHeaders": "={\n  \"Message-ID\": \"{{ $json.generated_message_id }}\"\n}"
+          "fileAttachments": "data, data1"
         }
       },
       "id": "e4f8d21b-3001-4b1a-9876-000000000008",
@@ -158,12 +166,13 @@
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
       "position": [
-        1520,
-        180
+        1808,
+        528
       ],
+      "webhookId": "3409c21c-0592-4df5-917e-012d28a08b79",
       "credentials": {
         "smtp": {
-          "id": "",
+          "id": "tX1RzY0kvRotVojr",
           "name": "SMTP account"
         }
       },
@@ -175,25 +184,123 @@
         "operation": "update",
         "documentId": {
           "__rl": true,
-          "value": "",
-          "mode": "id"
+          "value": "12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo",
+          "mode": "list",
+          "cachedResultName": "automail_test",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo/edit?usp=drivesdk"
         },
         "sheetName": {
           "__rl": true,
-          "value": "Sheet1",
-          "mode": "name"
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo/edit#gid=0"
         },
         "columns": {
           "mappingMode": "defineBelow",
           "value": {
-            "status": "สำเร็จ",
-            "email_id": "={{ $('4.1-4.2 Build Mail Template').item.json.generated_message_id }}",
-            "sent_at": "={{ $now.toISO() }}",
-            "fail_reason": ""
+            "mail_id": "={{ $json.messageId }}",
+            "mail_send_status": "complete",
+            "row_number": "={{ $('4. For Loop Each Record').item.json.row_number }}"
           },
           "matchingColumns": [
-            "email"
-          ]
+            "row_number"
+          ],
+          "schema": [
+            {
+              "id": "No",
+              "displayName": "No",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Name",
+              "displayName": "Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "insurance_status",
+              "displayName": "insurance_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "insurance_date_to",
+              "displayName": "insurance_date_to",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "mail_send_status",
+              "displayName": "mail_send_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "error_message",
+              "displayName": "error_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "mail_id",
+              "displayName": "mail_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
         },
         "options": {}
       },
@@ -202,13 +309,13 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [
-        1760,
-        100
+        2048,
+        448
       ],
       "credentials": {
         "googleApi": {
-          "id": "",
-          "name": "Google Service Account"
+          "id": "apU1LNQcR7cMOpnJ",
+          "name": "Google Service Account account"
         }
       }
     },
@@ -218,24 +325,122 @@
         "operation": "update",
         "documentId": {
           "__rl": true,
-          "value": "",
-          "mode": "id"
+          "value": "12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo",
+          "mode": "list",
+          "cachedResultName": "automail_test",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo/edit?usp=drivesdk"
         },
         "sheetName": {
           "__rl": true,
-          "value": "Sheet1",
-          "mode": "name"
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo/edit#gid=0"
         },
         "columns": {
           "mappingMode": "defineBelow",
           "value": {
-            "status": "ไม่สำเร็จ",
-            "fail_reason": "={{ $json.error?.message || 'SMTP Send Failed' }}",
-            "sent_at": "={{ $now.toISO() }}"
+            "mail_send_status": "failed",
+            "error_message": "={{ $json.error }}"
           },
           "matchingColumns": [
-            "email"
-          ]
+            "No"
+          ],
+          "schema": [
+            {
+              "id": "No",
+              "displayName": "No",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Name",
+              "displayName": "Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "insurance_status",
+              "displayName": "insurance_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "insurance_date_to",
+              "displayName": "insurance_date_to",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "mail_send_status",
+              "displayName": "mail_send_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "error_message",
+              "displayName": "error_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "mail_id",
+              "displayName": "mail_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
         },
         "options": {}
       },
@@ -244,13 +449,13 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [
-        1760,
-        280
+        2048,
+        624
       ],
       "credentials": {
         "googleApi": {
-          "id": "",
-          "name": "Google Service Account"
+          "id": "apU1LNQcR7cMOpnJ",
+          "name": "Google Service Account account"
         }
       }
     },
@@ -263,8 +468,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1980,
-        100
+        2272,
+        448
       ]
     },
     {
@@ -276,8 +481,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1980,
-        280
+        2272,
+        624
       ]
     },
     {
@@ -289,8 +494,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1300,
-        420
+        1552,
+        208
       ]
     },
     {
@@ -308,15 +513,257 @@
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
       "position": [
-        1520,
-        420
+        1776,
+        208
       ],
+      "webhookId": "54c0d6e7-b87a-450b-abcd-8b0f8c7807b7",
       "credentials": {
         "smtp": {
-          "id": "",
+          "id": "tX1RzY0kvRotVojr",
           "name": "SMTP account"
         }
       }
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "https://drive.google.com/file/d/158X9CirMwRvt-k6gkvCTVGEhpwHlxST2/view?usp=sharing",
+          "mode": "url"
+        },
+        "options": {
+          "binaryPropertyName": "data"
+        }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        288,
+        224
+      ],
+      "id": "450c201c-a44b-4be3-a434-cae9a59f4dc2",
+      "name": "Download file1",
+      "alwaysOutputData": false,
+      "credentials": {
+        "googleApi": {
+          "id": "apU1LNQcR7cMOpnJ",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "https://drive.google.com/file/d/1Fc_gL43UoWiZu2vvIt8Bqb2f9S0Azho6/view?usp=sharing",
+          "mode": "url"
+        },
+        "options": {
+          "binaryPropertyName": "data1"
+        }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        288,
+        384
+      ],
+      "id": "2d3a28ef-9541-481e-b4db-936fe0546b27",
+      "name": "Download file",
+      "credentials": {
+        "googleApi": {
+          "id": "apU1LNQcR7cMOpnJ",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        496,
+        224
+      ],
+      "id": "1e105557-c415-4c4e-9fa3-82a817b8e72f",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "value": "PucRQYaLxohRq0kC",
+          "mode": "list",
+          "cachedResultName": "email_log",
+          "cachedResultUrl": "/projects/GFB7AqunQAahZz4U/datatables/PucRQYaLxohRq0kC"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "email_id": "={{ $json.messageId }}",
+            "cust_name": "={{ $('4. For Loop Each Record').item.json.Name }}",
+            "email": "={{ $('4. For Loop Each Record').item.json.Email }}",
+            "mail_send_status": "success"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "cust_name",
+              "displayName": "cust_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "mail_send_status",
+              "displayName": "mail_send_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "error_message",
+              "displayName": "error_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "email_id",
+              "displayName": "email_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2048,
+        320
+      ],
+      "id": "f97e1dd0-49db-4243-82cc-b68cd48d869d",
+      "name": "Insert row"
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "value": "PucRQYaLxohRq0kC",
+          "mode": "list",
+          "cachedResultName": "email_log",
+          "cachedResultUrl": "/projects/GFB7AqunQAahZz4U/datatables/PucRQYaLxohRq0kC"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "cust_name": "={{ $('4. For Loop Each Record').item.json.Name }}",
+            "email": "={{ $('4. For Loop Each Record').item.json.Email }}",
+            "mail_send_status": "failed",
+            "error_message": "={{ $json.error }}",
+            "email_id": "={{ $json.messageId }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "cust_name",
+              "displayName": "cust_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "mail_send_status",
+              "displayName": "mail_send_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "error_message",
+              "displayName": "error_message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "email_id",
+              "displayName": "email_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2048,
+        816
+      ],
+      "id": "66b6d53f-9401-412e-af79-a85ef12cec52",
+      "name": "Insert row1"
     }
   ],
   "connections": {
@@ -346,7 +793,12 @@
       "main": [
         [
           {
-            "node": "1-2. Google Sheets Read (Service Account)",
+            "node": "Download file1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Download file",
             "type": "main",
             "index": 0
           }
@@ -379,14 +831,14 @@
       "main": [
         [
           {
-            "node": "4.1-4.2 Build Mail Template",
+            "node": "5. Aggregate Summary Report",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "5. Aggregate Summary Report",
+            "node": "4.1-4.2 Build Mail Template",
             "type": "main",
             "index": 0
           }
@@ -411,11 +863,21 @@
             "node": "4.3.T Record Success (Service Account)",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Insert row",
+            "type": "main",
+            "index": 0
           }
         ],
         [
           {
             "node": "4.3.F Record Failure (Service Account)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Insert row1",
             "type": "main",
             "index": 0
           }
@@ -476,18 +938,58 @@
           }
         ]
       ]
+    },
+    "Download file1": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download file": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "1-2. Google Sheets Read (Service Account)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "timezone": "Asia/Jakarta",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
   },
   "staticData": null,
-  "meta": null,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
   "nodeGroups": [],
   "pinData": {},
-  "versionId": "d6632cb7-69fe-427c-8007-4892bf759769",
+  "versionId": "b48b7a6d-9db0-4619-822c-eecf0bf77f29",
   "activeVersionId": null,
-  "versionCounter": 1,
+  "versionCounter": 190,
   "triggerCount": 0,
   "sourceWorkflowId": null,
   "tags": [],

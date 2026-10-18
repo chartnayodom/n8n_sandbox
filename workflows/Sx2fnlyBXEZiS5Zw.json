@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-10-17T10:36:35.985Z",
+  "updatedAt": "2026-10-18T10:07:42.772Z",
   "createdAt": "2026-10-17T10:36:35.985Z",
   "id": "Sx2fnlyBXEZiS5Zw",
   "name": "02 - Inbound Monitor & Auto-Forward (IMAP to SMTP)",
@@ -32,13 +32,12 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 2,
       "position": [
-        220,
-        140
+        224,
+        144
       ]
     },
     {
       "parameters": {
-        "mailbox": "INBOX",
         "postProcessAction": "nothing",
         "format": "resolved",
         "options": {
@@ -50,12 +49,12 @@
       "type": "n8n-nodes-base.emailReadImap",
       "typeVersion": 2,
       "position": [
-        220,
+        224,
         320
       ],
       "credentials": {
         "imap": {
-          "id": "",
+          "id": "2HMSsaztmuB5CTzy",
           "name": "IMAP account"
         }
       }
@@ -104,9 +103,10 @@
         960,
         320
       ],
+      "webhookId": "856902fa-a2ff-4ab1-91f0-7c09ffcd99f3",
       "credentials": {
         "smtp": {
-          "id": "",
+          "id": "tX1RzY0kvRotVojr",
           "name": "SMTP account"
         }
       }
@@ -153,21 +153,27 @@
             "node": "Forward Email to Target (SMTP)",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Check Reply (email_id) or Prefix",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "binaryMode": "separate"
   },
   "staticData": null,
   "meta": null,
   "nodeGroups": [],
   "pinData": {},
-  "versionId": "752540c2-2260-498d-9360-2dd0b30b4c62",
+  "versionId": "872b247c-72cd-4784-9f56-e6ae347bddaa",
   "activeVersionId": null,
-  "versionCounter": 1,
+  "versionCounter": 2,
   "triggerCount": 0,
   "sourceWorkflowId": null,
   "tags": [],
