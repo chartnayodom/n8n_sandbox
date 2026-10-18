@@ -11,3 +11,6 @@ node_modules/
 
 # Logs
 *.log
+
+# Sensitive credentials export
+credentials.json
