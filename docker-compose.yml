@@ -1,0 +1,19 @@
+services:
+  n8n:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: custom-n8n-email-automation:latest
+    container_name: n8n_auto_email
+    restart: always
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    env_file:
+      - .env
+    environment:
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-Asia/Bangkok}
+      - TZ=${TZ:-Asia/Bangkok}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+    volumes:
+      - ./n8n_data:/home/node/.n8n
+      - ./local-files:/files

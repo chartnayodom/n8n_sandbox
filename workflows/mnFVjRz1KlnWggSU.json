@@ -1,0 +1,195 @@
+{
+  "updatedAt": "2026-10-16T18:18:31.236Z",
+  "createdAt": "2026-10-16T18:18:31.236Z",
+  "id": "mnFVjRz1KlnWggSU",
+  "name": "02 - Inbound Monitor & Auto-Forward (IMAP to SMTP)",
+  "description": null,
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "mailbox": "INBOX",
+        "postProcessAction": "nothing",
+        "format": "resolved",
+        "options": {
+          "customEmailConfig": "[\"UNSEEN\"]"
+        }
+      },
+      "id": "e4f8d21b-2002-4b1a-9876-000000000001",
+      "name": "IMAP Email Trigger (Monitor Inbox)",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2,
+      "position": [
+        220,
+        280
+      ],
+      "credentials": {
+        "imap": {
+          "id": "",
+          "name": "IMAP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.headers?.['in-reply-to'] || '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "isNotEmpty"
+              }
+            },
+            {
+              "id": "c2",
+              "leftValue": "={{ $json.subject || '' }}",
+              "rightValue": "Re:",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "id": "c3",
+              "leftValue": "={{ $json.headers?.references || '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "isNotEmpty"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "e4f8d21b-2002-4b1a-9876-000000000002",
+      "name": "Is Reply or Contains Reference?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        460,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const originalFrom = $json.from?.text || $json.from?.value?.[0]?.address || $json.from || 'Unknown Sender';\nconst originalSubject = $json.subject || 'No Subject';\nconst originalDate = $json.date || new Date().toISOString();\nconst originalBody = $json.text || $json.html || '(Empty Body)';\nconst inReplyTo = $json.headers?.['in-reply-to'] || '';\nconst references = $json.headers?.references || '';\nconst messageId = $json.messageId || '';\n\nconst forwardSubject = originalSubject.toLowerCase().startsWith('fwd:') ? originalSubject : `Fwd: ${originalSubject}`;\nconst forwardHtml = `\n<div style=\"font-family: Arial, sans-serif; font-size: 14px;\">\n  <p><strong>[Auto-Forwarded Reply Received]</strong></p>\n  <hr style=\"border: none; border-top: 1px solid #ccc;\" />\n  <p><strong>From:</strong> ${originalFrom}<br/>\n  <strong>Date:</strong> ${originalDate}<br/>\n  <strong>Subject:</strong> ${originalSubject}<br/>\n  <strong>Message-ID:</strong> ${messageId}<br/>\n  <strong>In-Reply-To:</strong> ${inReplyTo}</p>\n  <hr style=\"border: none; border-top: 1px solid #ccc;\" />\n  <div>${$json.html || `<pre style=\"white-space: pre-wrap;\">${originalBody}</pre>`}</div>\n</div>\n`;\n\nreturn {\n  json: {\n    forwardTo: 'forward-destination@yourdomain.com',\n    forwardSubject,\n    forwardHtml,\n    originalFrom,\n    originalSubject,\n    originalDate,\n    messageId,\n    inReplyTo,\n    references\n  }\n};"
+      },
+      "id": "e4f8d21b-2002-4b1a-9876-000000000003",
+      "name": "Format Forward Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "notifications@yourdomain.com",
+        "toEmail": "={{ $json.forwardTo }}",
+        "subject": "={{ $json.forwardSubject }}",
+        "html": "={{ $json.forwardHtml }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "e4f8d21b-2002-4b1a-9876-000000000004",
+      "name": "Auto-Forward Email via SMTP",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        940,
+        260
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "",
+          "name": "SMTP account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "IMAP Email Trigger (Monitor Inbox)": {
+      "main": [
+        [
+          {
+            "node": "Is Reply or Contains Reference?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Reply or Contains Reference?": {
+      "main": [
+        [
+          {
+            "node": "Format Forward Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Forward Message": {
+      "main": [
+        [
+          {
+            "node": "Auto-Forward Email via SMTP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": {},
+  "versionId": "6a2e527f-f90c-455e-a834-a177d8cef3b7",
+  "activeVersionId": null,
+  "versionCounter": 1,
+  "triggerCount": 0,
+  "sourceWorkflowId": null,
+  "tags": [],
+  "shared": [
+    {
+      "updatedAt": "2026-10-16T18:18:31.239Z",
+      "createdAt": "2026-10-16T18:18:31.239Z",
+      "role": "workflow:owner",
+      "workflowId": "mnFVjRz1KlnWggSU",
+      "projectId": "GFB7AqunQAahZz4U",
+      "project": {
+        "updatedAt": "2026-10-16T17:50:53.976Z",
+        "createdAt": "2026-10-16T17:45:09.113Z",
+        "id": "GFB7AqunQAahZz4U",
+        "name": "Chartnayodom Wiboonpanich <baipor2545@hotmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "14ad2847-ac8e-42ae-8224-8dbf121e1e87"
+      }
+    }
+  ],
+  "versionMetadata": {
+    "name": null,
+    "description": null
+  }
+}

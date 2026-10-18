@@ -1,0 +1,51 @@
+{
+  "updatedAt": "2026-10-16T18:08:43.496Z",
+  "createdAt": "2026-10-16T17:55:08.050Z",
+  "id": "kj4Iqzg0D7PxjsMC",
+  "name": "My workflow",
+  "description": null,
+  "active": false,
+  "isArchived": false,
+  "nodes": [],
+  "connections": {},
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "nodeGroups": [],
+  "pinData": {},
+  "versionId": "083ff9f8-7e26-4d4a-bac4-fa1cacd18be4",
+  "activeVersionId": null,
+  "versionCounter": 12,
+  "triggerCount": 0,
+  "sourceWorkflowId": null,
+  "tags": [],
+  "shared": [
+    {
+      "updatedAt": "2026-10-16T17:55:08.051Z",
+      "createdAt": "2026-10-16T17:55:08.051Z",
+      "role": "workflow:owner",
+      "workflowId": "kj4Iqzg0D7PxjsMC",
+      "projectId": "GFB7AqunQAahZz4U",
+      "project": {
+        "updatedAt": "2026-10-16T17:50:53.976Z",
+        "createdAt": "2026-10-16T17:45:09.113Z",
+        "id": "GFB7AqunQAahZz4U",
+        "name": "Chartnayodom Wiboonpanich <baipor2545@hotmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "14ad2847-ac8e-42ae-8224-8dbf121e1e87"
+      }
+    }
+  ],
+  "versionMetadata": {
+    "name": null,
+    "description": null
+  }
+}

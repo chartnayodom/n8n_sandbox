@@ -1,0 +1,13 @@
+# Environment variables
+.env
+
+# n8n local data and persistence volumes
+n8n_data/
+.n8n/
+local-files/
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
