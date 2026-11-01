@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 
+const INSURANCE_TYPES = ['ประกันสุขภาพกลุ่ม', 'ประกันชีวิตกลุ่ม', 'ประกันอุบัติเหตุกลุ่ม'];
+
 export default function App() {
   // Current User & Auth State
   const [currentUser, setCurrentUser] = useState(() => {
@@ -10,7 +12,7 @@ export default function App() {
       return null;
     }
   });
-  const [authEmailInput, setAuthEmailInput] = useState('baipor2545@gmail.com');
+  const [authEmailInput, setAuthEmailInput] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState(null);
 
@@ -19,11 +21,12 @@ export default function App() {
   const [settingsSubTab, setSettingsSubTab] = useState('insurance'); // general | insurance | drive-links | users
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   // Data States
   const [dashboardData, setDashboardData] = useState({
-    metrics: { total: 128, forwarded: 89, review: 24, pending: 15 },
+    metrics: { total: 0, forwarded: 0, review: 0, pending: 0 },
     recentEmails: []
   });
   const [masterData, setMasterData] = useState([]);
@@ -31,20 +34,13 @@ export default function App() {
   const [templates, setTemplates] = useState([]);
   const [activityLogs, setActivityLogs] = useState([]);
   const [config, setConfig] = useState({
-    system: {
-      insurance_name: 'บริษัทประกัน จำกัด',
-      insurance_email: 'insurance@company.com',
-      auto_forward: 'true',
-      n8n_webhook_url: 'http://localhost:5678/webhook/re-forward'
-    },
+    system: {},
     driveLinks: [],
     users: []
   });
 
   // Selected Email for Detail Modal
   const [selectedEmail, setSelectedEmail] = useState(null);
-  const [detailTab, setDetailTab] = useState('body'); // body | attachments | chain
-  const [bodyFormat, setBodyFormat] = useState('preview'); // preview | text
   const [reforwarding, setReforwarding] = useState(false);
 
   // Inbox status filter
@@ -53,15 +49,8 @@ export default function App() {
   // Customer Modal (Add & Edit)
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
-  const [customerForm, setCustomerForm] = useState({
-    name: '',
-    email: '',
-    phone: '',
-    type: 'รถยนต์ (ชั้น 1)',
-    dataStatus: 'Active',
-    notes: '',
-    expiry: new Date(Date.now() + 180 * 86400000).toISOString().split('T')[0]
-  });
+  const emptyCustomerForm = { name: '', email: '', phone: '', type: '', policy: '', dataStatus: 'Valid', notes: '', expiry: '' };
+  const [customerForm, setCustomerForm] = useState(emptyCustomerForm);
 
   // Template Modal (Add & Edit)
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
@@ -115,6 +104,7 @@ export default function App() {
         fetch('/api/config').catch(() => null),
         fetch('/api/activity-logs').catch(() => null)
       ]);
+      setLoadError([dashRes, masterRes, emailRes, tplRes, confRes, logRes].some(r => !r || !r.ok));
 
       if (dashRes && dashRes.ok) {
         const d = await dashRes.json();
@@ -236,29 +226,19 @@ export default function App() {
   const handleSaveCustomer = async (e) => {
     e.preventDefault();
     try {
-      if (editingCustomer) {
-        const res = await fetch(`/api/master-data/${editingCustomer.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(customerForm)
-        });
-        if (res.ok) {
-          showToast('แก้ไขข้อมูลลูกค้าสำเร็จ');
-          setIsCustomerModalOpen(false);
-          fetchAllData();
-        }
-      } else {
-        const res = await fetch('/api/master-data', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(customerForm)
-        });
-        if (res.ok) {
-          showToast('เพิ่มลูกค้าใหม่ลง Master Data เรียบร้อย');
-          setIsCustomerModalOpen(false);
-          fetchAllData();
-        }
+      const res = await fetch(editingCustomer ? `/api/master-data/${editingCustomer.id}` : '/api/master-data', {
+        method: editingCustomer ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(customerForm)
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error || 'บันทึกไม่สำเร็จ', 'error');
+        return;
       }
+      showToast(editingCustomer ? 'แก้ไขข้อมูลลูกค้าสำเร็จ' : 'เพิ่มลูกค้าใหม่ลง Master Data เรียบร้อย');
+      setIsCustomerModalOpen(false);
+      fetchAllData();
     } catch (err) {
       showToast('เกิดข้อผิดพลาด: ' + err.message, 'error');
     }
@@ -428,6 +408,8 @@ export default function App() {
     const notInMaster = !masterEmailSet.has((item.recipientEmail || '').toLowerCase());
     return isNeedsReviewStatus || notInMaster;
   });
+
+  const pct = n => (dashboardData.metrics.total ? `${((n / dashboardData.metrics.total) * 100).toFixed(1)}%` : '0%');
 
   // ==========================================
   // TEMPLATE BUILDER & EASY EDITOR HELPERS
@@ -679,34 +661,6 @@ export default function App() {
                 />
               </div>
 
-              {/* Quick Select Buttons for demo / testing */}
-              <div className="pt-1">
-                <div className="text-[11px] text-slate-400 font-medium mb-1.5">เลือกบัญชีทดสอบที่ได้รับสิทธิ์:</div>
-                <div className="flex flex-wrap gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setAuthEmailInput('baipor2545@gmail.com')}
-                    className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-blue-50 hover:text-blue-600 text-slate-600 transition-colors"
-                  >
-                    👑 baipor2545@gmail.com (Owner/Admin)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAuthEmailInput('admin@company.com')}
-                    className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-blue-50 hover:text-blue-600 text-slate-600 transition-colors"
-                  >
-                    🛡️ admin@company.com (Admin)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAuthEmailInput('staff@company.com')}
-                    className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-blue-50 hover:text-blue-600 text-slate-600 transition-colors"
-                  >
-                    👤 staff@company.com (Viewer)
-                  </button>
-                </div>
-              </div>
-
               <div className="pt-3">
                 <button
                   type="submit"
@@ -789,7 +743,7 @@ export default function App() {
                 <span>รายการอีเมล (Inbox)</span>
               </div>
               <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-bold">
-                {emails.length || 128}
+                {emails.length}
               </span>
             </button>
 
@@ -856,8 +810,10 @@ export default function App() {
         <div className="p-4 border-t border-slate-800/80 bg-slate-950/40">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span className="text-[11px] text-slate-400">Google Sheets Live</span>
+              <span className={`w-2 h-2 rounded-full ${loadError ? 'bg-red-500' : 'bg-emerald-500 animate-pulse'}`}></span>
+              <span className={`text-[11px] ${loadError ? 'text-red-400' : 'text-slate-400'}`}>
+                {loadError ? 'โหลดข้อมูลจาก Google Sheets ไม่สำเร็จ' : 'Google Sheets'}
+              </span>
             </div>
             <button
               onClick={fetchAllData}
@@ -908,12 +864,7 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl text-xs text-slate-600 font-medium">
-              <span>📅</span>
-              <span>01/10/2026 - 31/10/2026</span>
-            </div>
-
-            <div className="flex items-center gap-2 pl-3 border-l border-slate-200">
+            <div className="flex items-center gap-2">
               <span className="text-xs font-bold text-slate-700">{currentUser.name}</span>
               <span className="text-[10px] bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-bold">
                 {currentUser.role}
@@ -941,7 +892,6 @@ export default function App() {
                   <div>
                     <div className="text-xs font-medium text-slate-500">อีเมลทั้งหมด</div>
                     <div className="text-2xl font-black text-slate-800 mt-1">{dashboardData.metrics.total}</div>
-                    <div className="text-[11px] text-emerald-600 font-semibold mt-1">↑ 12% รับจาก Gmail</div>
                   </div>
                   <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center text-xl">
                     📧
@@ -952,7 +902,7 @@ export default function App() {
                   <div>
                     <div className="text-xs font-medium text-slate-500">ส่งต่อบริษัทประกันแล้ว</div>
                     <div className="text-2xl font-black text-emerald-600 mt-1">{dashboardData.metrics.forwarded}</div>
-                    <div className="text-[11px] text-slate-400 mt-1">69.5% ของทั้งหมด</div>
+                    <div className="text-[11px] text-slate-400 mt-1">{pct(dashboardData.metrics.forwarded)} ของทั้งหมด</div>
                   </div>
                   <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl">
                     ✅
@@ -962,7 +912,7 @@ export default function App() {
                 <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
                   <div>
                     <div className="text-xs font-medium text-slate-500">Needs Review</div>
-                    <div className="text-2xl font-black text-amber-500 mt-1">{needsReviewEmails.length || 24}</div>
+                    <div className="text-2xl font-black text-amber-500 mt-1">{needsReviewEmails.length}</div>
                     <div className="text-[11px] text-amber-600 font-medium mt-1">ไม่อยู่ใน Master Data</div>
                   </div>
                   <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center text-xl">
@@ -974,7 +924,7 @@ export default function App() {
                   <div>
                     <div className="text-xs font-medium text-slate-500">รอดำเนินการ</div>
                     <div className="text-2xl font-black text-blue-600 mt-1">{dashboardData.metrics.pending}</div>
-                    <div className="text-[11px] text-slate-400 mt-1">11.7% ของทั้งหมด</div>
+                    <div className="text-[11px] text-slate-400 mt-1">{pct(dashboardData.metrics.pending)} ของทั้งหมด</div>
                   </div>
                   <div className="w-12 h-12 rounded-xl bg-slate-100 text-slate-600 flex items-center justify-center text-xl">
                     ⏳
@@ -1002,7 +952,7 @@ export default function App() {
                     <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
                       <tr>
                         <th className="p-3.5 pl-5">วันที่/เวลา</th>
-                        <th className="p-3.5">ผู้ส่ง</th>
+                        <th className="p-3.5">อีเมลผู้รับ</th>
                         <th className="p-3.5">หัวข้อ</th>
                         <th className="p-3.5">สถานะ</th>
                         <th className="p-3.5 text-right pr-5">การดำเนินการ</th>
@@ -1011,16 +961,15 @@ export default function App() {
                     <tbody className="divide-y divide-slate-100">
                       {(filteredEmails.length > 0 ? filteredEmails.slice(0, 6) : emails.slice(0, 6)).map((item, idx) => (
                         <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
-                          <td className="p-3.5 pl-5 text-slate-500 whitespace-nowrap">{item.timestamp || '2026-10-22 14:32'}</td>
-                          <td className="p-3.5 font-medium text-slate-800">{item.recipientEmail || 'customer@example.com'}</td>
-                          <td className="p-3.5 text-slate-700 font-medium truncate max-w-xs">{item.subject || 'ขอข้อมูลทำประกัน [BK-2026-001]'}</td>
+                          <td className="p-3.5 pl-5 text-slate-500 whitespace-nowrap">{item.timestamp}</td>
+                          <td className="p-3.5 font-medium text-slate-800">{item.recipientEmail}</td>
+                          <td className="p-3.5 text-slate-700 font-medium truncate max-w-xs">{item.subject}</td>
                           <td className="p-3.5">
                             <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
                               item.status === 'Sent' || item.status === 'Forwarded' ? 'badge-sent' :
                               item.status === 'Needs Review' ? 'badge-review' : 'badge-pending'
                             }`}>
-                              {item.status === 'Sent' || item.status === 'Forwarded' ? 'ส่งต่อแล้ว' :
-                               item.status === 'Needs Review' ? 'Needs Review' : 'รอดำเนินการ'}
+                              {item.status || '-'}
                             </span>
                           </td>
                           <td className="p-3.5 text-right pr-5">
@@ -1092,7 +1041,7 @@ export default function App() {
                   <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
                     <tr>
                       <th className="p-3.5 pl-5">วันที่/เวลา</th>
-                      <th className="p-3.5">ผู้ส่ง</th>
+                      <th className="p-3.5">อีเมลผู้รับ</th>
                       <th className="p-3.5">หัวข้อ</th>
                       <th className="p-3.5">สถานะ</th>
                       <th className="p-3.5 text-right pr-5">การดำเนินการ</th>
@@ -1109,8 +1058,7 @@ export default function App() {
                             item.status === 'Sent' || item.status === 'Forwarded' ? 'badge-sent' :
                             item.status === 'Needs Review' ? 'badge-review' : 'badge-pending'
                           }`}>
-                            {item.status === 'Sent' || item.status === 'Forwarded' ? 'ส่งต่อแล้ว' :
-                             item.status === 'Needs Review' ? 'Needs Review' : 'รอดำเนินการ'}
+                            {item.status || '-'}
                           </span>
                         </td>
                         <td className="p-3.5 text-right pr-5">
@@ -1149,7 +1097,7 @@ export default function App() {
                   <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
                     <tr>
                       <th className="p-3.5 pl-5">วันที่/เวลา</th>
-                      <th className="p-3.5">ผู้ส่ง (ยังไม่อยู่ใน Whitelist)</th>
+                      <th className="p-3.5">อีเมลผู้รับ (ไม่อยู่ใน Master Data)</th>
                       <th className="p-3.5">หัวข้ออีเมล</th>
                       <th className="p-3.5 text-right pr-5">การดำเนินการ</th>
                     </tr>
@@ -1195,15 +1143,7 @@ export default function App() {
                 <button
                   onClick={() => {
                     setEditingCustomer(null);
-                    setCustomerForm({
-                      name: '',
-                      email: '',
-                      phone: '',
-                      type: 'รถยนต์ (ชั้น 1)',
-                      dataStatus: 'Active',
-                      notes: '',
-                      expiry: new Date(Date.now() + 180 * 86400000).toISOString().split('T')[0]
-                    });
+                    setCustomerForm(emptyCustomerForm);
                     setIsCustomerModalOpen(true);
                   }}
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer"
@@ -1230,10 +1170,10 @@ export default function App() {
                         <td className="p-3.5 pl-5 text-slate-400 font-mono">{idx + 1}</td>
                         <td className="p-3.5 font-bold text-slate-800">{item.email}</td>
                         <td className="p-3.5 text-slate-700">{item.name || item.notes || '-'}</td>
-                        <td className="p-3.5 text-slate-600">{item.type || 'รถยนต์ (ชั้น 1)'}</td>
+                        <td className="p-3.5 text-slate-600">{item.type || '-'}</td>
                         <td className="p-3.5 text-center">
                           <span className="badge-sent px-2.5 py-0.5 rounded-full font-bold text-[11px]">
-                            {item.dataStatus || 'Active'}
+                            {item.dataStatus || '-'}
                           </span>
                         </td>
                         <td className="p-3.5 text-right pr-5">
@@ -1245,7 +1185,8 @@ export default function App() {
                                 email: item.email,
                                 phone: item.phone,
                                 type: item.type,
-                                dataStatus: item.dataStatus || 'Active',
+                                policy: item.policy,
+                                dataStatus: item.dataStatus,
                                 notes: item.notes,
                                 expiry: item.expiry
                               });
@@ -1480,16 +1421,6 @@ export default function App() {
                         />
                       </div>
 
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-700 mb-1">Timezone</label>
-                        <input
-                          type="text"
-                          disabled
-                          value="Asia/Bangkok (UTC+7)"
-                          className="w-full px-3 py-2 text-xs border border-slate-200 bg-slate-100 rounded-lg text-slate-500 font-mono"
-                        />
-                      </div>
-
                       <div className="pt-3">
                         <button
                           onClick={handleSaveSystemConfig}
@@ -1685,7 +1616,7 @@ export default function App() {
                   selectedEmail.status === 'Sent' || selectedEmail.status === 'Forwarded' ? 'badge-sent' :
                   selectedEmail.status === 'Needs Review' ? 'badge-review' : 'badge-pending'
                 }`}>
-                  {selectedEmail.status === 'Sent' || selectedEmail.status === 'Forwarded' ? 'ส่งต่อแล้ว' : selectedEmail.status}
+                  {selectedEmail.status || '-'}
                 </span>
                 <button
                   onClick={() => handleReForward(selectedEmail.id)}
@@ -1703,182 +1634,27 @@ export default function App() {
               </div>
             </div>
 
-            {/* Meta Grid */}
-            <div className="p-5 border-b border-slate-100 bg-white grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-              <div>
-                <span className="text-slate-400 font-medium">จาก:</span>
-                <span className="text-slate-800 font-bold ml-1.5">{selectedEmail.recipientEmail}</span>
-              </div>
-              <div>
-                <span className="text-slate-400 font-medium">ถึง:</span>
-                <span className="text-slate-800 font-bold ml-1.5">{config.system.insurance_email}</span>
-              </div>
-              <div>
-                <span className="text-slate-400 font-medium">วันที่:</span>
-                <span className="text-slate-700 ml-1.5">{selectedEmail.timestamp}</span>
-              </div>
-              <div>
-                <span className="text-slate-400 font-medium">Thread ID:</span>
-                <span className="text-slate-700 font-mono ml-1.5">{selectedEmail.threadId}</span>
-              </div>
-              <div className="col-span-2 md:col-span-4">
-                <span className="text-slate-400 font-medium">Message ID:</span>
-                <span className="text-slate-700 font-mono ml-1.5 bg-slate-100 px-2 py-0.5 rounded text-[11px]">
-                  {selectedEmail.messageId || `<${selectedEmail.id}@mail.gmail.com>`}
-                </span>
-              </div>
-            </div>
-
-            {/* Sub-tabs: Body | Attachments | Chain */}
-            <div className="px-5 pt-3 bg-slate-50 border-b border-slate-200 flex gap-2 text-xs font-bold">
-              <button
-                onClick={() => setDetailTab('body')}
-                className={`pb-2.5 px-3 border-b-2 transition-all cursor-pointer ${
-                  detailTab === 'body' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                เนื้อหาอีเมล (Body)
-              </button>
-              <button
-                onClick={() => setDetailTab('attachments')}
-                className={`pb-2.5 px-3 border-b-2 transition-all cursor-pointer ${
-                  detailTab === 'attachments' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                ไฟล์แนบ ({selectedEmail.attachments ? selectedEmail.attachments.length : 2})
-              </button>
-              <button
-                onClick={() => setDetailTab('chain')}
-                className={`pb-2.5 px-3 border-b-2 transition-all cursor-pointer ${
-                  detailTab === 'chain' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                ประวัติการทำงาน & Reply Chain
-              </button>
-            </div>
-
-            {/* Modal Body Content */}
+            {/* ข้อมูลจากแท็บ Email_Logs (แสดงเฉพาะคอลัมน์ที่มีในชีต) */}
             <div className="p-6 flex-1 overflow-y-auto">
-              {detailTab === 'body' && (
-                <div className="space-y-3">
-                  <div className="flex justify-end gap-2">
-                    <button
-                      onClick={() => setBodyFormat('preview')}
-                      className={`text-xs px-2.5 py-1 rounded-lg font-semibold cursor-pointer ${
-                        bodyFormat === 'preview' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'
-                      }`}
-                    >
-                      HTML Preview
-                    </button>
-                    <button
-                      onClick={() => setBodyFormat('text')}
-                      className={`text-xs px-2.5 py-1 rounded-lg font-semibold cursor-pointer ${
-                        bodyFormat === 'text' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'
-                      }`}
-                    >
-                      Plain Text
-                    </button>
+              <dl className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 text-xs">
+                {[
+                  ["Log ID", selectedEmail.id],
+                  ["เวลาที่ส่ง", selectedEmail.timestamp],
+                  ["Customer ID", selectedEmail.customerId],
+                  ["ชื่อลูกค้า", selectedEmail.customerName],
+                  ["อีเมลผู้รับ", selectedEmail.recipientEmail],
+                  ["รอบการส่ง", selectedEmail.mailRound],
+                  ["หัวข้อ", selectedEmail.subject],
+                  ["สถานะการส่ง", selectedEmail.status],
+                  ["Message ID", selectedEmail.messageId],
+                  ["รายละเอียดข้อผิดพลาด", selectedEmail.errorDetail]
+                ].map(([label, value]) => (
+                  <div key={label} className="border-b border-slate-100 pb-2">
+                    <dt className="text-slate-400 font-medium">{label}</dt>
+                    <dd className="text-slate-800 font-mono break-all mt-0.5">{value || "-"}</dd>
                   </div>
-
-                  {bodyFormat === 'preview' ? (
-                    <div className="p-5 border border-slate-200 rounded-2xl bg-white shadow-2xs text-xs text-slate-700 leading-relaxed">
-                      <p className="font-bold text-slate-800">เรียน เจ้าหน้าที่ประกันภัย,</p>
-                      <p className="mt-2">ขอส่งข้อมูลและเอกสารสำหรับการทำประกันภัยเพิ่มเติมตามหมายเลข <strong>{selectedEmail.subject}</strong> รายละเอียดและสำเนาเอกสารแนบตามด้านล่างนี้</p>
-                      <p className="mt-2">หากต้องการข้อมูลเพิ่มเติมประการใด สามารถแจ้งกลับมาได้เลยค่ะ</p>
-                      <div className="mt-4 pt-4 border-t border-slate-100 text-slate-500 text-[11px]">
-                        ขอบคุณค่ะ<br />
-                        ผู้ส่ง: {selectedEmail.recipientEmail}
-                      </div>
-                    </div>
-                  ) : (
-                    <pre className="p-4 bg-slate-900 text-slate-200 rounded-2xl text-xs font-mono whitespace-pre-wrap">
-                      {`From: ${selectedEmail.recipientEmail}
-To: ${config.system.insurance_email}
-Date: ${selectedEmail.timestamp}
-Subject: ${selectedEmail.subject}
-
-เรียน เจ้าหน้าที่ประกันภัย,
-ขอส่งข้อมูลและเอกสารสำหรับการทำประกันภัยเพิ่มเติมตามหมายเลข ${selectedEmail.subject}
-ขอบคุณค่ะ`}
-                    </pre>
-                  )}
-                </div>
-              )}
-
-              {detailTab === 'attachments' && (
-                <div className="space-y-4">
-                  <div className="text-xs text-slate-500">
-                    ไฟล์แนบที่ตรวจพบจากอีเมล (จัดเก็บบน Google Drive ตามนโยบาย):
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="p-4 border border-slate-200 rounded-2xl bg-white flex items-center justify-between shadow-2xs">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-red-50 text-red-600 font-bold flex items-center justify-center text-xs">
-                          PDF
-                        </div>
-                        <div>
-                          <div className="text-xs font-bold text-slate-800">ID_Card.pdf</div>
-                          <div className="text-[11px] text-slate-400">1.2 MB • บัตรประชาชน</div>
-                        </div>
-                      </div>
-                      <a
-                        href="https://drive.google.com"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="px-3 py-1.5 bg-slate-100 hover:bg-blue-50 text-blue-600 rounded-lg text-xs font-bold"
-                      >
-                        เปิดใน Drive
-                      </a>
-                    </div>
-
-                    <div className="p-4 border border-slate-200 rounded-2xl bg-white flex items-center justify-between shadow-2xs">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 font-bold flex items-center justify-center text-xs">
-                          DOC
-                        </div>
-                        <div>
-                          <div className="text-xs font-bold text-slate-800">Policy_Form.docx</div>
-                          <div className="text-[11px] text-slate-400">450 KB • แบบฟอร์มขอทำประกัน</div>
-                        </div>
-                      </div>
-                      <a
-                        href="https://drive.google.com"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="px-3 py-1.5 bg-slate-100 hover:bg-blue-50 text-blue-600 rounded-lg text-xs font-bold"
-                      >
-                        เปิดใน Drive
-                      </a>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {detailTab === 'chain' && (
-                <div className="space-y-4 text-xs">
-                  <div className="text-slate-500">ไทม์ไลน์และห่วงโซ่อีเมล (Email Reply Chain):</div>
-                  <div className="relative pl-6 border-l-2 border-blue-500 space-y-6">
-                    <div className="relative">
-                      <span className="absolute -left-[31px] top-0 w-4 h-4 rounded-full bg-blue-600 border-2 border-white"></span>
-                      <div className="font-bold text-slate-800">ได้รับอีเมลขาเข้า (Inbound)</div>
-                      <div className="text-[11px] text-slate-400">จาก: {selectedEmail.recipientEmail} • {selectedEmail.timestamp}</div>
-                      <div className="mt-1 text-slate-600 font-mono text-[11px] bg-slate-100 p-2 rounded-lg">
-                        Message-ID: {selectedEmail.messageId || '<inbound-1@gmail.com>'}
-                      </div>
-                    </div>
-
-                    <div className="relative">
-                      <span className="absolute -left-[31px] top-0 w-4 h-4 rounded-full bg-emerald-500 border-2 border-white"></span>
-                      <div className="font-bold text-slate-800">ตรวจสอบ Master Data และส่งต่อ (Auto Forward)</div>
-                      <div className="text-[11px] text-slate-400">ไปยัง: {config.system.insurance_email} • {selectedEmail.timestamp}</div>
-                      <div className="mt-1 text-slate-600 font-mono text-[11px] bg-slate-100 p-2 rounded-lg">
-                        In-Reply-To: {selectedEmail.messageId || '<inbound-1@gmail.com>'}<br />
-                        Status: Successfully Forwarded via n8n
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
+                ))}
+              </dl>
             </div>
           </div>
         </div>
@@ -1899,7 +1675,7 @@ Subject: ${selectedEmail.subject}
 
             <form onSubmit={handleSaveCustomer} className="space-y-3 text-xs">
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">ชื่อ-นามสกุล / บริษัท *</label>
+                <label className="block font-semibold text-slate-700 mb-1">ชื่อบริษัท / องค์กร *</label>
                 <input
                   type="text"
                   required
@@ -1936,15 +1712,39 @@ Subject: ${selectedEmail.subject}
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">ประเภทประกัน</label>
                 <select
-                  value={customerForm.type}
+                  value={customerForm.type || ''}
                   onChange={(e) => setCustomerForm({ ...customerForm, type: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
                 >
-                  <option>รถยนต์ (ชั้น 1)</option>
-                  <option>รถยนต์ (ชั้น 2+)</option>
-                  <option>ประกันสุขภาพ</option>
-                  <option>ประกันอัคคีภัย/บ้าน</option>
-                  <option>ประกันชีวิต</option>
+                  <option value="">— ไม่ระบุ —</option>
+                  {/* คงค่าเดิมในชีตที่ไม่อยู่ในรายการไว้ ไม่ให้ถูกทับตอนบันทึก */}
+                  {[...new Set([...INSURANCE_TYPES, customerForm.type].filter(Boolean))].map(t => (
+                    <option key={t}>{t}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">เลขที่กรมธรรม์ (Policy No)</label>
+                <input
+                  type="text"
+                  value={customerForm.policy || ''}
+                  onChange={(e) => setCustomerForm({ ...customerForm, policy: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">สถานะข้อมูล (Data Status)</label>
+                <select
+                  value={customerForm.dataStatus || ''}
+                  onChange={(e) => setCustomerForm({ ...customerForm, dataStatus: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                >
+                  {!customerForm.dataStatus && <option value="">— ไม่ระบุ —</option>}
+                  <option value="Valid">Valid (ส่งอีเมลแจ้งเตือนได้)</option>
+                  <option value="Invalid">Invalid (ห้ามส่งอีเมล)</option>
+                  {!['', 'Valid', 'Invalid'].includes(customerForm.dataStatus || '') && <option>{customerForm.dataStatus}</option>}
                 </select>
               </div>
 

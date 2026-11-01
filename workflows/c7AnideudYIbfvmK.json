@@ -1,11 +1,5 @@
 {
-  "updatedAt": "2026-10-18T14:06:09.975Z",
-  "createdAt": "2026-10-17T14:54:41.493Z",
-  "id": "c7AnideudYIbfvmK",
   "name": "01 - Google Sheets Outbound Email (Service Account)",
-  "description": null,
-  "active": false,
-  "isArchived": false,
   "nodes": [
     {
       "parameters": {
@@ -53,6 +47,14 @@
             {
               "name": "sheet_name",
               "value": "Sheet1"
+            },
+            {
+              "name": "template_name_r1",
+              "value": "R1 - 6 เดือน"
+            },
+            {
+              "name": "template_name_r2",
+              "value": "R2 - 3 เดือน"
             }
           ],
           "number": [
@@ -100,7 +102,7 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [
-        672,
+        1120,
         224
       ],
       "credentials": {
@@ -112,14 +114,14 @@
     },
     {
       "parameters": {
-        "jsCode": "// 3. กรองข้อมูล: ตรวจสอบ column \"due_date_to\" ว่าหลังจากวันนี้อีก 3 เดือน และยังไม่เคยส่งสำเร็จ\nconst results = [];\nconst today = new Date();\n\nconst targetMonths = 3;\nconst minTargetDate = new Date();\nminTargetDate.setMonth(today.getMonth() + targetMonths);\nminTargetDate.setDate(minTargetDate.getDate() - 15); // ช่วงเริ่มต้น window (-15 วัน)\n\nfor (const item of $input.all()) {\n  const row = item.json;\n  \n  const name = row['ชื่อ'] || row['name'] || row['Name'] || '';\n  const email = row['email'] || row['Email'] || row['อีเมล'] || '';\n  const status = row['status'] || row['Status'] || row['สถานะ'] || '';\n  const dueDateRaw = row['due_date_to'] || row['dueDate'] || '';\n  \n  // ข้ามรายการที่ไม่มี email หรือเคยส่งสำเร็จไปแล้ว\n  if (!email || status === 'สำเร็จ' || status === 'Sent') {\n    continue;\n  }\n  \n  let isMatchedDate = true;\n  if (dueDateRaw) {\n    const dueDate = new Date(dueDateRaw);\n    if (!isNaN(dueDate.getTime())) {\n      isMatchedDate = dueDate >= minTargetDate;\n    }\n  }\n  \n  if (isMatchedDate) {\n    results.push({\n      json: {\n        ...row,\n        resolved_name: name || 'คุณลูกค้า',\n        resolved_email: email,\n        resolved_due_date: dueDateRaw\n      }\n    });\n  }\n}\n\nreturn results;"
+        "jsCode": "// 3. กรองข้อมูล: ตรวจสอบวันหมดอายุ (Expiry_Date) รอบ 6 เดือน และรอบ 3 เดือน\nconst results = [];\nconst today = new Date();\ntoday.setHours(0, 0, 0, 0);\n\nfor (const item of $input.all()) {\n  const row = item.json;\n  \n  const name = row['Customer_Name'] || row['Name'] || row['ชื่อ'] || row['name'] || '';\n  const email = row['Email'] || row['email'] || row['อีเมล'] || '';\n  const expiryDateRaw = row['Expiry_Date'] || row['due_date_to'] || row['dueDate'] || row['insurance_date_to'] || '';\n  const policyNo = row['Policy_No'] || row['policy'] || '';\n  const insuranceType = row['Insurance_Type'] || row['type'] || 'ประกันภัย';\n  \n  const r1Status = (row['Mail_R1_Status'] || '').trim();\n  const r2Status = (row['Mail_R2_Status'] || '').trim();\n  const dataStatus = (row['Data_Status'] || 'Valid').trim();\n  \n  // ข้ามรายการที่ไม่มี email หรือถูกระบุว่า Invalid\n  if (!email || dataStatus === 'Invalid') {\n    continue;\n  }\n  \n  if (!expiryDateRaw) continue;\n  const expiryDate = new Date(expiryDateRaw);\n  if (isNaN(expiryDate.getTime())) continue;\n  expiryDate.setHours(0, 0, 0, 0);\n  \n  // คำนวณจำนวนวันก่อนหมดอายุ\n  const diffTime = expiryDate.getTime() - today.getTime();\n  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));\n  \n  let targetRound = null;\n  let roundLabel = '';\n  let monthsAhead = 0;\n  \n  // เกณฑ์รอบ 6 เดือน (R1): เหลือวันหมดอายุ 91 - 180 วัน (~3 ถึง 6 เดือน) และยังไม่เคยส่งรอบ R1\n  if (diffDays > 90 && diffDays <= 180) {\n    if (r1Status !== 'Sent' && r1Status !== 'สำเร็จ') {\n      targetRound = 'R1';\n      roundLabel = 'ล่วงหน้า 6 เดือน';\n      monthsAhead = 6;\n    }\n  }\n  // เกณฑ์รอบ 3 เดือน (R2): เหลือวันหมดอายุ 1 - 90 วัน (ภายใน 3 เดือน) และยังไม่เคยส่งรอบ R2\n  else if (diffDays > 0 && diffDays <= 90) {\n    if (r2Status !== 'Sent' && r2Status !== 'สำเร็จ') {\n      targetRound = 'R2';\n      roundLabel = 'ล่วงหน้า 3 เดือน';\n      monthsAhead = 3;\n    }\n  }\n  \n  if (targetRound) {\n    results.push({\n      json: {\n        ...row,\n        resolved_name: name || 'คุณลูกค้า',\n        resolved_email: email,\n        resolved_due_date: expiryDateRaw,\n        policy_no: policyNo,\n        insurance_type: insuranceType,\n        mail_round: targetRound,\n        round_label: roundLabel,\n        months_ahead: monthsAhead,\n        days_remaining: diffDays,\n        row_number: row.row_number || item.pairedItem?.item || null\n      }\n    });\n  }\n}\n\nreturn results;"
       },
       "id": "e4f8d21b-3001-4b1a-9876-000000000005",
       "name": "3. Filter due_date_to (3 Months) & Unsent",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        832,
+        1280,
         224
       ]
     },
@@ -132,21 +134,21 @@
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
       "position": [
-        1072,
+        1520,
         224
       ]
     },
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// 4.1-4.2 เตรียม Mail Body Template โดยใส่ \"ชื่อ\"\nconst record = $input.item.json;\nconst name = record.resolved_name;\nconst email = record.resolved_email;\nconst dueDate = record.resolved_due_date;\n\n// สร้าง Message-ID เฉพาะสำหรับใช้อ้างอิง\nconst domain = 'automail.internal';\nconst customMessageId = `<n8n-${Date.now()}-${Math.random().toString(36).substring(2, 9)}@${domain}>`;\n\nconst subject = `[แจ้งเตือนครบกำหนด] เรียน ${name} กำหนดการของท่านใกล้ครบกำหนดในอีก 3 เดือน`;\n\nconst htmlBody = `\n<div style=\"font-family: 'Sarabun', Arial, sans-serif; line-height: 1.6; color: #333;\">\n  <h2 style=\"color: #1a73e8;\">แจ้งเตือนกำหนดการ</h2>\n  <p>เรียนคุณ <strong>${name}</strong>,</p>\n  <p>ระบบขอแจ้งเตือนว่ารายการของท่านมีกำหนดครบกำหนดในวันที่: <strong>${dueDate || 'อีก 3 เดือนข้างหน้า'}</strong></p>\n  <p>หากท่านมีข้อสงสัยหรือต้องการดำเนินการต่อ สามารถตอบกลับ (Reply) อีเมลฉบับนี้ได้ทันทีครับ</p>\n  <hr style=\"border: none; border-top: 1px solid #e0e0e0; margin: 20px 0;\" />\n  <p style=\"font-size: 12px; color: #777;\">อีเมลนี้ถูกส่งโดยระบบอัตโนมัติ (Reference ID: ${customMessageId})</p>\n</div>\n`;\n\nconst file1 = $('Download file1').first().binary?.data;\nconst file2 = $('Download file').first().binary?.data1;\nreturn {\n  json: {\n    ...record,\n    mail_subject: subject,\n    mail_html: htmlBody,\n    generated_message_id: customMessageId\n  },\n  // แนบไฟล์กลับเข้ามาใน Item เพื่อส่งต่อให้ Node Send Email\n  binary: {\n    data: file1,\n    data1: file2\n  }\n};"
+        "jsCode": "// 4.1-4.2 เติมค่าลงใน Template ที่ดึงจากชีต Templates (ดู node \"Pick Templates\")\n// ตัวแปรที่ใช้ใน template ได้: {{customerName}} {{policyNo}} {{bookingNo}} {{policyExpiry}} {{insuranceType}}\n//                              {{roundLabel}} {{monthsAhead}} {{driveLinks}} {{referenceId}}\nconst record = $input.item.json;\nconst tpl = $('Pick Templates').first().json[record.mail_round]; // R1 | R2\n\n// สร้าง Message-ID เฉพาะสำหรับใช้อ้างอิง\nconst customMessageId = `<n8n-${Date.now()}-${Math.random().toString(36).substring(2, 9)}@automail.internal>`;\n\nconst file1 = $('Download file1').first().binary?.data;\nconst file2 = $('Download file').first().binary?.data1;\n\nconst policyNo = record.policy_no || 'POL-REF';\nconst vars = {\n  customerName: record.resolved_name,\n  policyNo,\n  bookingNo: policyNo,\n  policyExpiry: record.resolved_due_date,\n  insuranceType: record.insurance_type || 'ประกันภัย',\n  roundLabel: record.round_label,\n  monthsAhead: record.months_ahead,\n  driveLinks: [file1, file2].filter(Boolean).map(f => f.fileName).join(', '),\n  referenceId: customMessageId\n};\n\nconst esc = s => s.replace(/[&<>\"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[ch]));\nconst fill = (text, escape) => text.replace(/\\{\\{\\s*(\\w+)\\s*\\}\\}/g, (_, k) => {\n  const v = String(vars[k] ?? '');\n  return escape ? esc(v) : v;\n});\n\nreturn {\n  json: {\n    ...record,\n    mail_subject: fill(tpl.subject, false),\n    mail_html: fill(tpl.html, true),\n    generated_message_id: customMessageId,\n    sent_date: new Date().toISOString().split('T')[0]\n  },\n  binary: { data: file1, data1: file2 }\n};"
       },
       "id": "e4f8d21b-3001-4b1a-9876-000000000007",
       "name": "4.1-4.2 Build Mail Template",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1328,
+        1776,
         528
       ]
     },
@@ -166,7 +168,7 @@
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
       "position": [
-        1808,
+        2256,
         528
       ],
       "webhookId": "3409c21c-0592-4df5-917e-012d28a08b79",
@@ -199,8 +201,10 @@
         "columns": {
           "mappingMode": "defineBelow",
           "value": {
-            "mail_id": "={{ $json.messageId }}",
-            "mail_send_status": "complete",
+            "Mail_R1_Status": "={{ $('4.1-4.2 Build Mail Template').item.json.mail_round === 'R1' ? 'Sent' : ($('4. For Loop Each Record').item.json.Mail_R1_Status || '') }}",
+            "Mail_R1_Date": "={{ $('4.1-4.2 Build Mail Template').item.json.mail_round === 'R1' ? $('4.1-4.2 Build Mail Template').item.json.sent_date : ($('4. For Loop Each Record').item.json.Mail_R1_Date || '') }}",
+            "Mail_R2_Status": "={{ $('4.1-4.2 Build Mail Template').item.json.mail_round === 'R2' ? 'Sent' : ($('4. For Loop Each Record').item.json.Mail_R2_Status || '') }}",
+            "Mail_R2_Date": "={{ $('4.1-4.2 Build Mail Template').item.json.mail_round === 'R2' ? $('4.1-4.2 Build Mail Template').item.json.sent_date : ($('4. For Loop Each Record').item.json.Mail_R2_Date || '') }}",
             "row_number": "={{ $('4. For Loop Each Record').item.json.row_number }}"
           },
           "matchingColumns": [
@@ -208,58 +212,8 @@
           ],
           "schema": [
             {
-              "id": "No",
-              "displayName": "No",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "canBeUsedToMatch": true,
-              "removed": true
-            },
-            {
-              "id": "Name",
-              "displayName": "Name",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "canBeUsedToMatch": true,
-              "removed": true
-            },
-            {
-              "id": "Email",
-              "displayName": "Email",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "canBeUsedToMatch": true,
-              "removed": true
-            },
-            {
-              "id": "insurance_status",
-              "displayName": "insurance_status",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "canBeUsedToMatch": true,
-              "removed": true
-            },
-            {
-              "id": "insurance_date_to",
-              "displayName": "insurance_date_to",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "canBeUsedToMatch": true,
-              "removed": true
-            },
-            {
-              "id": "mail_send_status",
-              "displayName": "mail_send_status",
+              "id": "Mail_R1_Status",
+              "displayName": "Mail_R1_Status",
               "required": false,
               "defaultMatch": false,
               "display": true,
@@ -268,18 +222,28 @@
               "removed": false
             },
             {
-              "id": "error_message",
-              "displayName": "error_message",
+              "id": "Mail_R1_Date",
+              "displayName": "Mail_R1_Date",
               "required": false,
               "defaultMatch": false,
               "display": true,
               "type": "string",
               "canBeUsedToMatch": true,
-              "removed": true
+              "removed": false
             },
             {
-              "id": "mail_id",
-              "displayName": "mail_id",
+              "id": "Mail_R2_Status",
+              "displayName": "Mail_R2_Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Mail_R2_Date",
+              "displayName": "Mail_R2_Date",
               "required": false,
               "defaultMatch": false,
               "display": true,
@@ -309,7 +273,7 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [
-        2048,
+        2496,
         448
       ],
       "credentials": {
@@ -340,16 +304,19 @@
         "columns": {
           "mappingMode": "defineBelow",
           "value": {
-            "mail_send_status": "failed",
-            "error_message": "={{ $json.error }}"
+            "Mail_R1_Status": "={{ $('4.1-4.2 Build Mail Template').item.json.mail_round === 'R1' ? 'Failed' : ($('4. For Loop Each Record').item.json.Mail_R1_Status || '') }}",
+            "Mail_R1_Date": "={{ $('4.1-4.2 Build Mail Template').item.json.mail_round === 'R1' ? $('4.1-4.2 Build Mail Template').item.json.sent_date : ($('4. For Loop Each Record').item.json.Mail_R1_Date || '') }}",
+            "Mail_R2_Status": "={{ $('4.1-4.2 Build Mail Template').item.json.mail_round === 'R2' ? 'Failed' : ($('4. For Loop Each Record').item.json.Mail_R2_Status || '') }}",
+            "Mail_R2_Date": "={{ $('4.1-4.2 Build Mail Template').item.json.mail_round === 'R2' ? $('4.1-4.2 Build Mail Template').item.json.sent_date : ($('4. For Loop Each Record').item.json.Mail_R2_Date || '') }}",
+            "row_number": "={{ $('4. For Loop Each Record').item.json.row_number }}"
           },
           "matchingColumns": [
-            "No"
+            "row_number"
           ],
           "schema": [
             {
-              "id": "No",
-              "displayName": "No",
+              "id": "Mail_R1_Status",
+              "displayName": "Mail_R1_Status",
               "required": false,
               "defaultMatch": false,
               "display": true,
@@ -358,48 +325,8 @@
               "removed": false
             },
             {
-              "id": "Name",
-              "displayName": "Name",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "canBeUsedToMatch": true,
-              "removed": true
-            },
-            {
-              "id": "Email",
-              "displayName": "Email",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "canBeUsedToMatch": true,
-              "removed": true
-            },
-            {
-              "id": "insurance_status",
-              "displayName": "insurance_status",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "canBeUsedToMatch": true,
-              "removed": true
-            },
-            {
-              "id": "insurance_date_to",
-              "displayName": "insurance_date_to",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "canBeUsedToMatch": true,
-              "removed": true
-            },
-            {
-              "id": "mail_send_status",
-              "displayName": "mail_send_status",
+              "id": "Mail_R1_Date",
+              "displayName": "Mail_R1_Date",
               "required": false,
               "defaultMatch": false,
               "display": true,
@@ -408,8 +335,8 @@
               "removed": false
             },
             {
-              "id": "error_message",
-              "displayName": "error_message",
+              "id": "Mail_R2_Status",
+              "displayName": "Mail_R2_Status",
               "required": false,
               "defaultMatch": false,
               "display": true,
@@ -418,14 +345,14 @@
               "removed": false
             },
             {
-              "id": "mail_id",
-              "displayName": "mail_id",
+              "id": "Mail_R2_Date",
+              "displayName": "Mail_R2_Date",
               "required": false,
               "defaultMatch": false,
               "display": true,
               "type": "string",
               "canBeUsedToMatch": true,
-              "removed": true
+              "removed": false
             },
             {
               "id": "row_number",
@@ -449,7 +376,7 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [
-        2048,
+        2496,
         624
       ],
       "credentials": {
@@ -461,40 +388,40 @@
     },
     {
       "parameters": {
-        "jsCode": "// บันทึก log สถานะสำเร็จเพื่อนำไปรวมส่งรายงานสรุป\nconst template = $('4.1-4.2 Build Mail Template').item.json;\nreturn {\n  json: {\n    is_success: true,\n    name: template.resolved_name,\n    email: template.resolved_email,\n    message_id: template.generated_message_id,\n    reason: 'Success'\n  }\n};"
+        "jsCode": "// บันทึก log สถานะสำเร็จเพื่อนำไปรวมส่งรายงานสรุป\nconst template = $('4.1-4.2 Build Mail Template').item.json;\nreturn {\n  json: {\n    is_success: true,\n    name: template.resolved_name,\n    email: template.resolved_email,\n    message_id: template.generated_message_id,\n    mail_round: template.mail_round,\n    round_label: template.round_label,\n    reason: 'Success'\n  }\n};"
       },
       "id": "e4f8d21b-3001-4b1a-9876-000000000011",
       "name": "Log Success Result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2272,
+        2720,
         448
       ]
     },
     {
       "parameters": {
-        "jsCode": "// บันทึก log สถานะไม่สำเร็จเพื่อนำไปรวมส่งรายงานสรุป\nconst template = $('4.1-4.2 Build Mail Template').item.json;\nconst errMsg = $input.item.json.error?.message || 'SMTP Error';\nreturn {\n  json: {\n    is_success: false,\n    name: template.resolved_name,\n    email: template.resolved_email,\n    message_id: template.generated_message_id,\n    reason: errMsg\n  }\n};"
+        "jsCode": "// บันทึก log สถานะไม่สำเร็จเพื่อนำไปรวมส่งรายงานสรุป\nconst template = $('4.1-4.2 Build Mail Template').item.json;\nconst err = $('4.2 Send Email (SMTP)').item.json.error;\nconst errMsg = (typeof err === 'string' ? err : err?.message) || 'SMTP Error';\nreturn {\n  json: {\n    is_success: false,\n    name: template.resolved_name,\n    email: template.resolved_email,\n    message_id: template.generated_message_id,\n    mail_round: template.mail_round,\n    round_label: template.round_label,\n    reason: errMsg\n  }\n};"
       },
       "id": "e4f8d21b-3001-4b1a-9876-000000000012",
       "name": "Log Failure Result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2272,
+        2720,
         624
       ]
     },
     {
       "parameters": {
-        "jsCode": "// 5. สรุปผลการส่ง Auto Email ทั้งหมดในรอบนี้\nlet successLogs = [];\nlet failLogs = [];\n\ntry {\n  successLogs = $('Log Success Result').all().map(i => i.json);\n} catch (e) {}\n\ntry {\n  failLogs = $('Log Failure Result').all().map(i => i.json);\n} catch (e) {}\n\nconst totalSuccess = successLogs.length;\nconst totalFailed = failLogs.length;\nconst totalProcessed = totalSuccess + totalFailed;\n\nconst nowStr = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });\n\nlet htmlReport = `\n<div style=\"font-family: Arial, sans-serif; line-height: 1.5; color: #222;\">\n  <h2>📊 รายงานผลการส่ง Auto Email ประจำรอบ (Service Account)</h2>\n  <p><strong>เวลาประมวลผล:</strong> ${nowStr}</p>\n  <table border=\"1\" cellpadding=\"8\" cellspacing=\"0\" style=\"border-collapse: collapse; width: 100%; max-width: 600px;\">\n    <tr style=\"background-color: #f2f2f2;\"><th>รายการ</th><th>จำนวน</th></tr>\n    <tr><td>ทั้งหมดที่เข้าเงื่อนไข</td><td><strong>${totalProcessed}</strong></td></tr>\n    <tr style=\"color: green;\"><td>ส่งสำเร็จ (4.3.T)</td><td><strong>${totalSuccess}</strong></td></tr>\n    <tr style=\"color: red;\"><td>ไม่สำเร็จ (4.3.F)</td><td><strong>${totalFailed}</strong></td></tr>\n  </table>\n`;\n\nif (totalFailed > 0) {\n  htmlReport += `\n  <h3 style=\"color: red; margin-top: 20px;\">⚠️ รายการที่ไม่สำเร็จ:</h3>\n  <ul>\n    ${failLogs.map(f => `<li><strong>${f.name}</strong> (${f.email}) - เหตุผล: ${f.reason}</li>`).join('')}\n  </ul>\n  `;\n}\n\nhtmlReport += `\n  <hr style=\"margin-top: 30px; border: none; border-top: 1px solid #ccc;\" />\n  <p style=\"font-size: 12px; color: #666;\">รายงานนี้สร้างขึ้นโดยระบบอัตโนมัติ n8n (Google Service Account)</p>\n</div>\n`;\n\nreturn {\n  json: {\n    total_processed: totalProcessed,\n    total_success: totalSuccess,\n    total_failed: totalFailed,\n    report_html: htmlReport,\n    report_subject: `[Auto Mail Report] สรุปผลการส่งอีเมล (${totalSuccess} สำเร็จ, ${totalFailed} ล้มเหลว)`\n  }\n};"
+        "jsCode": "// 5. สรุปผลการส่ง Auto Email ทั้งหมดในรอบนี้ แยกตามรอบ 6 เดือน และ 3 เดือน\nlet successLogs = [];\nlet failLogs = [];\n\ntry {\n  successLogs = $('Log Success Result').all().map(i => i.json);\n} catch (e) {}\n\ntry {\n  failLogs = $('Log Failure Result').all().map(i => i.json);\n} catch (e) {}\n\nconst totalSuccess = successLogs.length;\nconst totalFailed = failLogs.length;\nconst totalProcessed = totalSuccess + totalFailed;\n\nconst r1Count = successLogs.filter(l => l.mail_round === 'R1').length;\nconst r2Count = successLogs.filter(l => l.mail_round === 'R2').length;\n\nconst nowStr = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });\n\nlet htmlReport = `\n<div style=\"font-family: Arial, sans-serif; line-height: 1.5; color: #222;\">\n  <h2>📊 รายงานผลการส่ง Auto Email ประจำรอบ (รอบ 6 เดือน & 3 เดือน)</h2>\n  <p><strong>เวลาประมวลผล:</strong> ${nowStr}</p>\n  <table border=\"1\" cellpadding=\"8\" cellspacing=\"0\" style=\"border-collapse: collapse; width: 100%; max-width: 600px;\">\n    <tr style=\"background-color: #f2f2f2;\"><th>รายการ</th><th>จำนวน</th></tr>\n    <tr><td>ทั้งหมดที่เข้าเงื่อนไข</td><td><strong>${totalProcessed}</strong></td></tr>\n    <tr style=\"color: #1a73e8;\"><td>รอบ 6 เดือน (R1) ส่งสำเร็จ</td><td><strong>${r1Count}</strong></td></tr>\n    <tr style=\"color: #d93025;\"><td>รอบ 3 เดือน (R2) ส่งสำเร็จ</td><td><strong>${r2Count}</strong></td></tr>\n    <tr style=\"color: green;\"><td>ส่งสำเร็จรวม</td><td><strong>${totalSuccess}</strong></td></tr>\n    <tr style=\"color: red;\"><td>ไม่สำเร็จ</td><td><strong>${totalFailed}</strong></td></tr>\n  </table>\n`;\n\nif (totalFailed > 0) {\n  htmlReport += `\n  <h3 style=\"color: red; margin-top: 20px;\">⚠️ รายการที่ไม่สำเร็จ:</h3>\n  <ul>\n    ${failLogs.map(f => `<li><strong>${f.name}</strong> (${f.email}) [${f.round_label || ''}] - เหตุผล: ${f.reason}</li>`).join('')}\n  </ul>\n  `;\n}\n\nhtmlReport += `\n  <hr style=\"margin-top: 30px; border: none; border-top: 1px solid #ccc;\" />\n  <p style=\"font-size: 12px; color: #666;\">รายงานนี้สร้างขึ้นโดยระบบอัตโนมัติ n8n AutoMail</p>\n</div>\n`;\n\nreturn {\n  json: {\n    total_processed: totalProcessed,\n    total_success: totalSuccess,\n    total_failed: totalFailed,\n    r1_success: r1Count,\n    r2_success: r2Count,\n    report_html: htmlReport,\n    report_subject: `[Auto Mail Report] สรุปผลส่งอีเมล 6M & 3M (สำเร็จ: ${totalSuccess}, ล้มเหลว: ${totalFailed})`\n  }\n};"
       },
       "id": "e4f8d21b-3001-4b1a-9876-000000000013",
       "name": "5. Aggregate Summary Report",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1552,
+        2000,
         208
       ]
     },
@@ -513,7 +440,7 @@
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
       "position": [
-        1776,
+        2224,
         208
       ],
       "webhookId": "54c0d6e7-b87a-450b-abcd-8b0f8c7807b7",
@@ -540,7 +467,7 @@
       "type": "n8n-nodes-base.googleDrive",
       "typeVersion": 3,
       "position": [
-        288,
+        736,
         224
       ],
       "id": "450c201c-a44b-4be3-a434-cae9a59f4dc2",
@@ -569,7 +496,7 @@
       "type": "n8n-nodes-base.googleDrive",
       "typeVersion": 3,
       "position": [
-        288,
+        736,
         384
       ],
       "id": "2d3a28ef-9541-481e-b4db-936fe0546b27",
@@ -590,7 +517,7 @@
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3.2,
       "position": [
-        496,
+        944,
         224
       ],
       "id": "1e105557-c415-4c4e-9fa3-82a817b8e72f",
@@ -674,7 +601,7 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        2048,
+        2496,
         320
       ],
       "id": "f97e1dd0-49db-4243-82cc-b68cd48d869d",
@@ -759,13 +686,60 @@
       "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1.1,
       "position": [
-        2048,
+        2496,
         816
       ],
       "id": "66b6d53f-9401-412e-af79-a85ef12cec52",
       "name": "Insert row1"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "documentId": {
+          "__rl": true,
+          "value": "12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo",
+          "mode": "list",
+          "cachedResultName": "automail_test",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Templates",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "7d62b4a7-0559-46c0-8986-d75f7f0bb77b",
+      "name": "Read Templates",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        288,
+        224
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleApi": {
+          "id": "apU1LNQcR7cMOpnJ",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// เลือก Template ของรอบ R1/R2 จากชีต Templates (ค้นด้วยคอลัมน์ name; ชื่อกำหนดใน Global Config)\n// หัวคอลัมน์แถวที่ 1 ของชีต: id, name, subject, recipientType, status, description, htmlContent\nconst cfg = $('Global Config').first().json;\nconst rows = $input.all().map(i => i.json);\n\nconst need = ['name', 'subject', 'status', 'htmlContent'];\nconst have = Object.keys(rows[0] || {});\nconst missing = need.filter(k => !have.includes(k));\nif (missing.length) {\n  throw new Error(`ชีต Templates: ไม่พบหัวคอลัมน์ [${missing.join(', ')}] (หัวที่พบ: ${have.join(', ') || 'ไม่มีข้อมูล'})`);\n}\n\nconst pick = round => {\n  const name = cfg[`template_name_${round.toLowerCase()}`];\n  const row = rows.find(r => String(r.name || '').trim() === name);\n  if (!row) throw new Error(`ชีต Templates: ไม่พบ template ชื่อ \"${name}\" (รอบ ${round})`);\n  if ((row.status || 'Active').trim() !== 'Active') throw new Error(`ชีต Templates: template \"${name}\" ไม่ได้เป็น Active`);\n  if (!row.subject || !row.htmlContent) throw new Error(`ชีต Templates: template \"${name}\" ไม่มี subject หรือ htmlContent`);\n  return { subject: row.subject, html: row.htmlContent };\n};\n\nreturn [{ json: { R1: pick('R1'), R2: pick('R2') } }];"
+      },
+      "id": "d800f6d5-34c5-4390-8bfe-ee4838e60f90",
+      "name": "Pick Templates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        512,
+        224
+      ]
     }
   ],
+  "pinData": {},
   "connections": {
     "Schedule Trigger (Daily)": {
       "main": [
@@ -793,12 +767,7 @@
       "main": [
         [
           {
-            "node": "Download file1",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Download file",
+            "node": "Read Templates",
             "type": "main",
             "index": 0
           }
@@ -971,8 +940,36 @@
           }
         ]
       ]
+    },
+    "Read Templates": {
+      "main": [
+        [
+          {
+            "node": "Pick Templates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Templates": {
+      "main": [
+        [
+          {
+            "node": "Download file1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Download file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
+  "active": false,
   "settings": {
     "executionOrder": "v1",
     "binaryMode": "separate",
@@ -981,40 +978,12 @@
     "callerPolicy": "workflowsFromSameOwner",
     "availableInMCP": false
   },
-  "staticData": null,
+  "versionId": "b0bf9890-1c54-4bdf-a0d5-1a7198184e32",
   "meta": {
-    "templateCredsSetupCompleted": true
+    "templateCredsSetupCompleted": true,
+    "instanceId": "2e633fffb0ea72f35ba674745e8461d60f71e2fc37f19249685deaefdcecb3e2"
   },
   "nodeGroups": [],
-  "pinData": {},
-  "versionId": "b48b7a6d-9db0-4619-822c-eecf0bf77f29",
-  "activeVersionId": null,
-  "versionCounter": 190,
-  "triggerCount": 0,
-  "sourceWorkflowId": null,
-  "tags": [],
-  "shared": [
-    {
-      "updatedAt": "2026-10-17T14:54:41.496Z",
-      "createdAt": "2026-10-17T14:54:41.496Z",
-      "role": "workflow:owner",
-      "workflowId": "c7AnideudYIbfvmK",
-      "projectId": "GFB7AqunQAahZz4U",
-      "project": {
-        "updatedAt": "2026-10-16T17:50:53.976Z",
-        "createdAt": "2026-10-16T17:45:09.113Z",
-        "id": "GFB7AqunQAahZz4U",
-        "name": "Chartnayodom Wiboonpanich <baipor2545@hotmail.com>",
-        "type": "personal",
-        "icon": null,
-        "description": null,
-        "customTelemetryTags": [],
-        "creatorId": "14ad2847-ac8e-42ae-8224-8dbf121e1e87"
-      }
-    }
-  ],
-  "versionMetadata": {
-    "name": null,
-    "description": null
-  }
+  "id": "c7AnideudYIbfvmK",
+  "tags": []
 }

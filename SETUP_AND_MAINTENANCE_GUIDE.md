@@ -22,12 +22,13 @@
 * **การทำงาน:**
   1. ดึงข้อมูลรายการจาก **Google Sheets (Service Account)** หรือ **SQLite / Data Table**
   2. กรองข้อมูลเฉพาะรายการที่ครบกำหนดล่วงหน้า 3 เดือน (`due_date_to` / `insurance_date_to`) และสถานะยังไม่เคยส่ง
-  3. **Parallel Download:** ดาวน์โหลดเอกสารแนบคู่ขนานจาก Google Drive 2 ไฟล์ และส่งต่อ Binary Data เข้าสู่ลูป
-  4. วนลูปส่งอีเมลรายบุคคลผ่าน **SMTP** พร้อมสร้าง Unique `Message-ID` (`mail_id`) สำหรับใช้อ้างอิงการตอบกลับ
-  5. **Error Branching:**
+  3. **ดึง Template อีเมลจากชีต `Templates`** (เลือกตามรอบ R1/R2 ด้วยชื่อ — รูปแบบชีตและตัวแปรดู [docs/email_templates_r1_r2.md](docs/email_templates_r1_r2.md)) ถ้าไม่พบ template workflow จะหยุดและแจ้ง error
+  4. **Parallel Download:** ดาวน์โหลดเอกสารแนบคู่ขนานจาก Google Drive 2 ไฟล์ และส่งต่อ Binary Data เข้าสู่ลูป
+  5. วนลูปส่งอีเมลรายบุคคลผ่าน **SMTP** พร้อมสร้าง Unique `Message-ID` (`mail_id`) สำหรับใช้อ้างอิงการตอบกลับ
+  6. **Error Branching:**
      * **สำเร็จ (4.3.T):** อัปเดตสถานะเป็น `complete` / `สำเร็จ` และบันทึก `mail_id`
      * **ไม่สำเร็จ (4.3.F):** อัปเดตสถานะเป็น `failed` และบันทึกข้อความผิดพลาด
-  6. **Summary Report:** รวมสถิติการส่งรอบนั้น แล้วส่งอีเมลสรุปรายงานไปยังผู้ดูแลระบบ (Admin)
+  7. **Summary Report:** รวมสถิติการส่งรอบนั้น แล้วส่งอีเมลสรุปรายงานไปยังผู้ดูแลระบบ (Admin)
 
 ### 📥 Workflow 2: Inbound Monitor & Auto-Forward (Listener Flow)
 * **ไฟล์:** `workflows/a14U6Ep5Yxt4eZH1.json`

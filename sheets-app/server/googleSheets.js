@@ -1,33 +1,8 @@
 const { google } = require('googleapis');
 require('dotenv').config();
 
-// Memory store for activity logs (session persistence)
-const activityLogs = [
-  {
-    id: 'ACT-001',
-    timestamp: '2026-10-22 14:35:10',
-    user: 'System Bot',
-    action: 'AUTO_FORWARD',
-    details: 'ส่งต่ออีเมลจาก customer1@example.com ไปยัง insurance@company.com สำเร็จ',
-    status: 'Success'
-  },
-  {
-    id: 'ACT-002',
-    timestamp: '2026-10-22 12:18:25',
-    user: 'n8n IMAP Trigger',
-    action: 'NEEDS_REVIEW',
-    details: 'ตรวจพบอีเมล [BK-2026-002] จาก unknown@example.com (ไม่อยู่ใน Master Data)',
-    status: 'Warning'
-  },
-  {
-    id: 'ACT-003',
-    timestamp: '2026-10-21 16:45:00',
-    user: 'Admin',
-    action: 'USER_LOGIN',
-    details: 'baipor2545@gmail.com เข้าสู่ระบบด้วยสิทธิ์ Admin',
-    status: 'Info'
-  }
-];
+// ponytail: activity log อยู่ใน memory (หายเมื่อรีสตาร์ท, ไม่มีแท็บในชีต) ย้ายลงชีตเมื่อต้องการเก็บถาวร
+const activityLogs = [];
 
 function isConfigured() {
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
@@ -95,7 +70,6 @@ function logActivity(action, details, user = 'Admin', status = 'Success') {
 // ==========================================
 
 async function checkDrivePermission(email) {
-  if (!isConfigured()) return { hasPermission: true, role: 'owner', displayName: 'Demo User' };
   try {
     const drive = getDriveClient();
     const res = await drive.permissions.list({
@@ -157,22 +131,7 @@ async function verifyUserAccess(email) {
 
 async function getConfig() {
   const sheets = getSheetsClient();
-  if (!sheets) {
-    return {
-      system: {
-        insurance_name: 'บริษัทประกัน จำกัด',
-        insurance_email: 'insurance@company.com',
-        auto_forward: 'true',
-        n8n_webhook_url: 'http://localhost:5678/webhook/re-forward'
-      },
-      driveLinks: [
-        { name: 'Policy_Form.docx', url: 'https://drive.google.com/file/d/1demo-policy-form/view', description: 'แบบฟอร์มขอทำประกัน', _rowIndex: 2 }
-      ],
-      users: [
-        { email: 'admin@company.com', name: 'Admin ประกันภัย', role: 'Admin', description: 'ผู้ดูแลระบบ', _rowIndex: 3 }
-      ]
-    };
-  }
+  if (!sheets) throw new Error('Google Sheets credentials not configured');
 
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID(),
@@ -298,13 +257,13 @@ async function getMasterData() {
     type: r[4] || '',
     policy: r[5] || '',
     expiry: r[6] || '',
-    dataStatus: r[7] || 'Active',
+    dataStatus: r[7] || '',
     reviewReason: r[8] || '',
-    mailR1Status: r[9] || 'Pending',
+    mailR1Status: r[9] || '',
     mailR1Date: r[10] || '',
-    mailR2Status: r[11] || 'Pending',
+    mailR2Status: r[11] || '',
     mailR2Date: r[12] || '',
-    customerStatus: r[13] || 'รอดำเนินการ',
+    customerStatus: r[13] || '',
     nextFollowup: r[14] || '',
     assignedAgent: r[15] || '',
     notes: r[16] || '',
@@ -316,26 +275,29 @@ async function addMasterData(item) {
   const sheets = getSheetsClient();
   if (!sheets) throw new Error('Google Sheets credentials not configured');
 
+  if (!item.email) throw new Error('กรุณาระบุอีเมล');
   const currentRows = await getMasterData();
+  assertEmailUnique(currentRows, item.email);
   const nextId = String(currentRows.length + 1);
 
+  // เขียนเฉพาะค่าที่ผู้ใช้กรอก ช่องที่ไม่ได้กรอกเป็นค่าว่าง (ไม่เติมค่าแทน เพราะ n8n ใช้ชีตนี้ส่งอีเมลจริง)
   const newRow = [
     item.id || nextId,
     item.name || '',
-    item.email || '',
+    item.email,
     item.phone || '',
-    item.type || 'รถยนต์ (ชั้น 1)',
-    item.policy || `POL-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
-    item.expiry || new Date(Date.now() + 180 * 86400000).toISOString().split('T')[0],
-    item.dataStatus || 'Active',
+    item.type || '',
+    item.policy || '',
+    item.expiry || '',
+    item.dataStatus || '',
     item.reviewReason || '',
-    item.mailR1Status || 'Pending',
+    item.mailR1Status || '',
     item.mailR1Date || '',
-    item.mailR2Status || 'Pending',
+    item.mailR2Status || '',
     item.mailR2Date || '',
-    item.customerStatus || 'รอดำเนินการ',
+    item.customerStatus || '',
     item.nextFollowup || '',
-    item.assignedAgent || 'Agent Admin',
+    item.assignedAgent || '',
     item.notes || ''
   ];
 
@@ -351,6 +313,13 @@ async function addMasterData(item) {
   return { success: true, item: newRow };
 }
 
+// 1 Customer = 1 บริษัท: อีเมลห้ามซ้ำกับแถวอื่น
+function assertEmailUnique(rows, email, exceptId) {
+  const e = email.trim().toLowerCase();
+  const dup = rows.find(r => r.id !== exceptId && r.email.trim().toLowerCase() === e);
+  if (dup) throw new Error(`อีเมล ${email} มีอยู่แล้วใน Master Data (ID ${dup.id})`);
+}
+
 async function updateMasterData(id, item) {
   const sheets = getSheetsClient();
   if (!sheets) throw new Error('Google Sheets credentials not configured');
@@ -358,6 +327,10 @@ async function updateMasterData(id, item) {
   const currentRows = await getMasterData();
   const found = currentRows.find(r => r.id === String(id));
   if (!found) throw new Error(`Customer with ID ${id} not found`);
+  if (item.email !== undefined) {
+    if (!item.email) throw new Error('กรุณาระบุอีเมล');
+    assertEmailUnique(currentRows, item.email, found.id);
+  }
 
   const updatedRow = [
     found.id,
@@ -405,26 +378,16 @@ async function getEmailLogs() {
 
   const rows = res.data.values || [];
   return rows.map((r, idx) => ({
-    id: r[0] || `LOG-${1000 + idx}`,
+    id: r[0] || '',
     timestamp: r[1] || '',
     customerId: r[2] || '',
     customerName: r[3] || '',
     recipientEmail: r[4] || '',
-    mailRound: r[5] || 'ส่งต่อบริษัทประกัน',
+    mailRound: r[5] || '',
     subject: r[6] || '',
     messageId: r[7] || '',
-    status: (r[8] || 'Sent').trim(),
+    status: (r[8] || '').trim(),
     errorDetail: r[9] || '',
-    threadId: `th_${r[0] || idx}`,
-    driveUrl: 'https://drive.google.com/drive/folders/demo-attachments',
-    attachments: [
-      { name: 'ID_Card.pdf', size: '1.2 MB', type: 'pdf', url: 'https://drive.google.com/file/d/demo-id/view' },
-      { name: 'Policy_Form.docx', size: '450 KB', type: 'doc', url: 'https://drive.google.com/file/d/demo-form/view' }
-    ],
-    chain: [
-      { from: r[4] || 'customer@example.com', time: r[1] || '2026-10-22 14:32', type: 'Inbound', messageId: r[7] || '<init@mail.gmail.com>' },
-      { from: 'auto@insurance.com', time: r[1] || '2026-10-22 14:33', type: 'Forwarded', messageId: '<fwd@insurance.com>' }
-    ],
     _rowIndex: idx + 2
   }));
 }
@@ -439,10 +402,10 @@ async function addEmailLog(item) {
     item.customerId || '',
     item.customerName || '',
     item.recipientEmail || '',
-    item.mailRound || 'ส่งต่อบริษัทประกัน',
+    item.mailRound || '',
     item.subject || '',
-    item.messageId || `<n8n-${Date.now()}@automail.internal>`,
-    item.status || 'Sent',
+    item.messageId || '',
+    item.status || '',
     item.errorDetail || ''
   ];
 
@@ -466,28 +429,24 @@ async function reForwardEmail(id) {
   const config = await getConfig();
   const webhookUrl = config.system.n8n_webhook_url;
 
-  let webhookCalled = false;
-  if (webhookUrl && webhookUrl.startsWith('http')) {
-    try {
-      await fetch(webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 're-forward',
-          logId: id,
-          recipientEmail: target.recipientEmail,
-          subject: target.subject,
-          messageId: target.messageId,
-          targetInsuranceEmail: config.system.insurance_email || 'insurance@company.com'
-        })
-      });
-      webhookCalled = true;
-    } catch (err) {
-      console.warn('n8n webhook call failed, proceeding with sheet status update:', err.message);
-    }
-  }
+  if (!webhookUrl || !webhookUrl.startsWith('http')) throw new Error('ยังไม่ได้ตั้งค่า n8n Webhook URL (หน้า ตั้งค่าระบบ)');
+  if (!config.system.insurance_email) throw new Error('ยังไม่ได้ตั้งค่าอีเมลบริษัทประกัน (หน้า ตั้งค่าระบบ)');
 
-  // 2. Append new log entry for re-forward action
+  const res = await fetch(webhookUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 're-forward',
+      logId: id,
+      recipientEmail: target.recipientEmail,
+      subject: target.subject,
+      messageId: target.messageId,
+      targetInsuranceEmail: config.system.insurance_email
+    })
+  });
+  if (!res.ok) throw new Error(`n8n webhook ตอบกลับ ${res.status} ${res.statusText}`);
+
+  // 2. บันทึก log เฉพาะเมื่อ n8n รับคำสั่งสำเร็จ (Message_ID จริงอยู่ฝั่ง n8n จึงเว้นว่าง)
   await addEmailLog({
     customerId: target.customerId || target.id,
     customerName: target.customerName,
@@ -498,7 +457,7 @@ async function reForwardEmail(id) {
   });
 
   logActivity('RE_FORWARD', `ส่งต่ออีเมล ID ${id} (${target.subject}) ซ้ำไปยังบริษัทประกัน`, 'Admin');
-  return { success: true, webhookCalled, message: `ส่งต่ออีเมล ${id} สำเร็จ` };
+  return { success: true, message: `ส่งต่ออีเมล ${id} สำเร็จ` };
 }
 
 async function quickWhitelistSender(senderEmail, customerName) {
@@ -506,10 +465,9 @@ async function quickWhitelistSender(senderEmail, customerName) {
 
   // Add to Master Data
   await addMasterData({
-    name: customerName || senderEmail.split('@')[0],
+    name: customerName || '',
     email: senderEmail,
-    type: 'รถยนต์ (ชั้น 1)',
-    dataStatus: 'Active',
+    dataStatus: 'Valid',
     notes: 'อนุมัติผ่านหน้า Needs Review'
   });
 
@@ -531,29 +489,18 @@ async function getTemplates() {
   });
 
   const rows = res.data.values || [];
-  return rows.map((r, idx) => ({
-    id: r[0] || `TPL-${idx + 1}`,
-    name: r[1] || '',
-    subject: r[2] || '',
-    recipientType: r[3] || 'ส่งถึงลูกค้า',
-    status: r[4] || 'Active',
-    description: r[5] || '',
-    htmlContent: r[6] || `<!DOCTYPE html>
-<html>
-<body style="font-family: sans-serif; line-height: 1.6; color: #333;">
-  <div style="max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px;">
-    <h2 style="color: #2563eb;">แจ้งข้อมูลการทำประกันภัย</h2>
-    <p>เรียน คุณ {{customerName}},</p>
-    <p>ระบบได้รับข้อมูลการจองทำประกันหมายเลข <strong>{{bookingNo}}</strong> เรียบร้อยแล้ว</p>
-    <p>วันหมดอายุความคุ้มครอง: {{policyExpiry}}</p>
-    <p>เอกสารแนบที่เกี่ยวข้อง: {{driveLinks}}</p>
-    <hr style="border: none; border-top: 1px solid #cbd5e1; margin: 20px 0;" />
-    <p style="font-size: 12px; color: #64748b;">AutoMail Insurance Automation System</p>
-  </div>
-</body>
-</html>`,
-    _rowIndex: idx + 2
-  }));
+  return rows
+    .map((r, idx) => ({
+      id: r[0] || '',
+      name: r[1] || '',
+      subject: r[2] || '',
+      recipientType: r[3] || '',
+      status: r[4] || '',
+      description: r[5] || '',
+      htmlContent: r[6] || '',
+      _rowIndex: idx + 2
+    }))
+    .filter(t => t.id || t.name); // แถวที่ถูกลบ (clear) จะเหลือว่าง ไม่ต้องแสดง
 }
 
 async function saveTemplate(template) {
@@ -583,15 +530,16 @@ async function saveTemplate(template) {
     logActivity('TEMPLATE_UPDATE', `แก้ไขเทมเพลต ${template.name || existing.id}`, 'Admin');
     return { success: true, template: updatedRow };
   } else {
-    const nextId = `TPL-${String(templates.length + 1).padStart(2, '0')}`;
+    const maxNo = Math.max(0, ...templates.map(t => parseInt(t.id.replace(/\D/g, ''), 10) || 0));
+    const nextId = `TPL-${String(maxNo + 1).padStart(2, '0')}`;
     const newRow = [
       template.id || nextId,
-      template.name || 'เทมเพลตใหม่',
+      template.name || '',
       template.subject || '',
-      template.recipientType || 'ส่งถึงลูกค้า',
-      template.status || 'Active',
+      template.recipientType || '',
+      template.status || '',
       template.description || '',
-      template.htmlContent || '<p>เนื้อหาเทมเพลตอีเมล</p>'
+      template.htmlContent || ''
     ];
 
     await sheets.spreadsheets.values.append({
@@ -638,12 +586,7 @@ async function getDashboardSummary() {
   const pending = logs.filter(l => l.status === 'Pending').length;
 
   return {
-    metrics: {
-      total: total || 128,
-      forwarded: forwarded || 89,
-      review: review || 24,
-      pending: pending || 15
-    },
+    metrics: { total, forwarded, review, pending },
     recentEmails: logs.slice(-8).reverse(),
     customersCount: master.length
   };
