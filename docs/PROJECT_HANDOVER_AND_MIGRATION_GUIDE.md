@@ -236,3 +236,4 @@ n8n_sandbox/
 ├── GEMINI.md                                      # กฎและ Role ของ AI Coding Agent
 └── .gitignore                                     # กรองไฟล์ sensitive ไม่ให้ขึ้น Git
 ```
+
