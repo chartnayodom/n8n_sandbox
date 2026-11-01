@@ -1,0 +1,250 @@
+{
+  "name": "02 - Inbound Monitor & Auto-Forward (IMAP to SMTP) Updated",
+  "nodes": [
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "target_forward_email",
+              "value": "64070021@kmitl.ac.th"
+            },
+            {
+              "name": "subject_prefixes",
+              "value": "[PorInsurance], [แจ้งเตือนครบกำหนด]"
+            },
+            {
+              "name": "sender_email",
+              "value": "porinsurance@gmail.com"
+            },
+            {
+              "name": "sqlite_db_path",
+              "value": "E:/GitHub/n8n_sandbox/n8n_data/automail.sqlite"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e4f8d21b-2002-4b1a-9876-000000000001",
+      "name": "Global Forward Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        112,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "postProcessAction": "nothing",
+        "format": "resolved",
+        "options": {
+          "customEmailConfig": "[\"UNSEEN\"]"
+        }
+      },
+      "id": "e4f8d21b-2002-4b1a-9876-000000000002",
+      "name": "Listener: IMAP Email Trigger",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2,
+      "position": [
+        -16,
+        352
+      ],
+      "alwaysOutputData": false,
+      "credentials": {
+        "imap": {
+          "id": "2HMSsaztmuB5CTzy",
+          "name": "IMAP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. แยกแยะเงื่อนไขเบื้องต้นจากอีเมลที่ได้รับผ่าน IMAP\nconst item = $input.item.json;\nconst subject = (item.subject || '').trim();\nconst inReplyTo = item.headers?.['in-reply-to'] || '';\nconst references = item.headers?.references || '';\nconst senderEmail = item.from?.value?.[0]?.address || item.from?.text || '';\n\n// ค้นหา Prefix ที่กำหนด เช่น [PorInsurance] หรือ ข้อความคำนวณค่ากรมธรรม์\nlet prefixes = [\n  '[porinsurance]',\n  'ข้อมูลจำนวนพนักงานในบริษัทสำหรับการคำณวนค่ากรมธรรม์',\n  '[แจ้งเตือนครบกำหนด]'\n];\n\ntry {\n  const configPrefixes = $('Global Forward Config').item.json.subject_prefixes;\n  if (configPrefixes) {\n    prefixes = configPrefixes.split(',').map(p => p.trim().toLowerCase());\n  }\n} catch (e) {}\n\nconst lowerSubject = subject.toLowerCase();\nconst matchedPrefix = prefixes.find(p => p && lowerSubject.includes(p));\nconst isPrefixMatch = Boolean(matchedPrefix);\n\n// ตรวจสอบว่ามีค่า Header สำหรับ Reply หรือไม่\nconst isReplyEmail = Boolean(inReplyTo || references || lowerSubject.startsWith('re:'));\n\n// ทำความสะอาด In-Reply-To ID (ตัด < > ออกเพื่อไปค้นใน SQLite)\nconst cleanReplyId = inReplyTo.replace(/[<>]/g, '').trim();\n\n// ถ้าไม่เข้าทั้ง 2 เงื่อนไข (ไม่ใช่ทั้ง Reply และไม่มี Prefix) ให้หยุดทำงาน\nif (!isPrefixMatch && !isReplyEmail) {\n  return [];\n}\n\nreturn {\n  json: {\n    ...item,\n    sender_email_clean: senderEmail,\n    in_reply_to_clean: cleanReplyId,\n    is_prefix_match: isPrefixMatch,\n    is_reply_email: isReplyEmail,\n    matched_prefix: matchedPrefix || '',\n    original_subject: subject\n  },\n  binary: $input.item.binary || {}\n};"
+      },
+      "id": "e4f8d21b-2002-4b1a-9876-000000000003",
+      "name": "Pre-Filter: Check Prefix & Reply Headers",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// รวมข้อมูลอีเมลต้นฉบับเข้ากับข้อมูลลูกค้าที่พบใน SQLite (ถ้ามี)\nconst preFilter = $('Pre-Filter: Check Prefix & Reply Headers').item;\nconst mail = preFilter.json;\nconst binaryData = preFilter.binary || {};\nconst sqliteRow = $input.item.json;\n\nconst hasSqliteMatch = Boolean(sqliteRow && sqliteRow.id && sqliteRow.email);\nconst isPrefixMatch = mail.is_prefix_match;\n\n// ถ้าไม่มีทั้งใน SQLite และ Subject ไม่ได้ Match Prefix ให้ข้าม\nif (!hasSqliteMatch && !isPrefixMatch) {\n  return [];\n}\n\nlet matchReason = '';\nif (hasSqliteMatch && isPrefixMatch) {\n  matchReason = `ตรวจพบทั้งใน SQLite (รหัส: ${sqliteRow.no || sqliteRow.id}) และตรงกับ Prefix \"${mail.matched_prefix}\"`;\n} else if (hasSqliteMatch) {\n  matchReason = `Reply ตรงกับ mail_id ใน SQLite (ลูกค้า: ${sqliteRow.name})`;\n} else {\n  matchReason = `ตรงกับเงื่อนไข Subject Prefix: \"${mail.matched_prefix}\"`;\n}\n\nconst originalFrom = mail.from?.text || mail.from?.value?.[0]?.address || mail.from || 'Unknown Sender';\nconst originalSubject = mail.original_subject || mail.subject || 'No Subject';\nconst originalDate = mail.date || new Date().toISOString();\nconst originalBody = mail.html || `<pre style=\"white-space: pre-wrap; font-family: inherit;\">${mail.text || '(ไม่มีข้อความ)'}</pre>`;\n\nconst targetEmail = $('Global Forward Config').item.json.target_forward_email || 'target-team@yourdomain.com';\nconst forwardSubject = originalSubject.toLowerCase().startsWith('fwd:') ? originalSubject : `Fwd: ${originalSubject}`;\n\n// สรุปข้อมูลลูกค้าจาก SQLite ถ้าพบ\nlet customerBox = '';\nif (hasSqliteMatch) {\n  customerBox = `\n  <div style=\"background-color: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 12px 16px; margin-bottom: 20px; font-size: 13px;\">\n    <h4 style=\"margin: 0 0 8px 0; color: #166534;\">👤 ข้อมูลลูกค้าจากฐานข้อมูล SQLite:</h4>\n    <p style=\"margin: 2px 0;\"><strong>ชื่อลูกค้า:</strong> ${sqliteRow.name}</p>\n    <p style=\"margin: 2px 0;\"><strong>อีเมล:</strong> ${sqliteRow.email}</p>\n    <p style=\"margin: 2px 0;\"><strong>สถานะกรมธรรม์:</strong> ${sqliteRow.insurance_status || '-'}</p>\n    <p style=\"margin: 2px 0;\"><strong>วันสิ้นสุดกรมธรรม์:</strong> ${sqliteRow.insurance_date_to || '-'}</p>\n  </div>\n  `;\n}\n\nconst binaryKeys = Object.keys(binaryData);\nconst attachmentNotice = binaryKeys.length > 0 \n  ? `<p style=\"color: #0d652d; margin: 4px 0;\"><strong>📎 แนบไฟล์จากผู้ส่ง:</strong> ${binaryKeys.length} ไฟล์ (${binaryKeys.join(', ')})</p>` \n  : '';\n\nconst forwardHtml = `\n<div style=\"font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #222;\">\n  <div style=\"background-color: #e8f0fe; border-left: 4px solid #1a73e8; padding: 12px 16px; margin-bottom: 20px;\">\n    <strong>🚀 [Auto-Forwarded by n8n Listener Flow]</strong><br/>\n    <span>เงื่อนไขที่ตรวจพบ: <code>${matchReason}</code></span>\n  </div>\n  \n  ${customerBox}\n  \n  <div style=\"background-color: #f8f9fa; border: 1px solid #ddd; padding: 12px 16px; margin-bottom: 20px; font-size: 13px;\">\n    <p style=\"margin: 2px 0;\"><strong>From:</strong> ${originalFrom}</p>\n    <p style=\"margin: 2px 0;\"><strong>Date:</strong> ${originalDate}</p>\n    <p style=\"margin: 2px 0;\"><strong>Subject:</strong> ${originalSubject}</p>\n    ${mail.in_reply_to_clean ? `<p style=\"margin: 2px 0;\"><strong>In-Reply-To:</strong> ${mail.in_reply_to_clean}</p>` : ''}\n    ${attachmentNotice}\n  </div>\n  \n  <div style=\"margin-top: 20px;\">\n    ${originalBody}\n  </div>\n</div>\n`;\n\nreturn {\n  json: {\n    forward_to: targetEmail,\n    forward_subject: forwardSubject,\n    forward_html: forwardHtml,\n    customer_id: sqliteRow.id || null,\n    original_from: originalFrom,\n    matched_reason: matchReason\n  },\n  binary: binaryData\n};"
+      },
+      "id": "e4f8d21b-2002-4b1a-9876-000000000005",
+      "name": "Format Forward Message (Enrich Customer)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        816,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Global Forward Config').item.json.sender_email }}",
+        "toEmail": "={{ $json.forward_to }}",
+        "subject": "={{ $json.forward_subject }}",
+        "html": "={{ $json.forward_html }}",
+        "options": {
+          "appendAttribution": false,
+          "fileAttachments": "attachment_0, attachment_1, attachment_2, attachment_3, data"
+        }
+      },
+      "id": "e4f8d21b-2002-4b1a-9876-000000000006",
+      "name": "Forward Email to Target (SMTP)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1104,
+        352
+      ],
+      "webhookId": "2d7a40b0-87e8-4e18-80fa-6e080885bce5",
+      "credentials": {
+        "smtp": {
+          "id": "tX1RzY0kvRotVojr",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -304,
+        80
+      ],
+      "id": "c0d24d47-43c8-459a-b353-1a7a65bbff3d",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -64,
+        144
+      ],
+      "id": "c86b6863-8340-40c8-bcb7-78c4292a4421",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "PucRQYaLxohRq0kC",
+          "mode": "list",
+          "cachedResultName": "email_log",
+          "cachedResultUrl": "/projects/GFB7AqunQAahZz4U/datatables/PucRQYaLxohRq0kC"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "mail_send_status",
+              "keyValue": "success"
+            }
+          ]
+        },
+        "limit": 100
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        -304,
+        -64
+      ],
+      "id": "f34c6378-a353-4d62-b764-c5f1b37daac9",
+      "name": "Get row(s)"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Global Forward Config": {
+      "main": [
+        [
+          {
+            "node": "Pre-Filter: Check Prefix & Reply Headers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Listener: IMAP Email Trigger": {
+      "main": [
+        [
+          {
+            "node": "Pre-Filter: Check Prefix & Reply Headers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pre-Filter: Check Prefix & Reply Headers": {
+      "main": [
+        [
+          {
+            "node": "Format Forward Message (Enrich Customer)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Forward Message (Enrich Customer)": {
+      "main": [
+        [
+          {
+            "node": "Forward Email to Target (SMTP)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Forward Email to Target (SMTP)": {
+      "main": [
+        []
+      ]
+    },
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Global Forward Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "473d63e8-d71b-4c3f-827d-079c3db8d8bd",
+  "meta": {
+    "instanceId": "2e633fffb0ea72f35ba674745e8461d60f71e2fc37f19249685deaefdcecb3e2"
+  },
+  "nodeGroups": [],
+  "id": "a14U6Ep5Yxt4eZH1",
+  "tags": []
+}

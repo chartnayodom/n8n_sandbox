@@ -276,3 +276,7 @@ When the user asks you to set up or update this project, execute these steps in 
 2. **Verify Local Tooling:** Check `node -v` and `npm -v`. If `n8n` is not installed globally, prompt or run `npm install -g n8n`.
 3. **Workflow Sync:** Remind or assist the user to run `n8n export:workflow --backup --output=./workflows/` before running `git add` and `git commit`.
 4. **Activation Notice:** Note that on a fresh target instance, the owner setup screen must be completed once before CLI imports work, and newly imported workflows are deactivated by default unless published in the UI or via `n8n publish:workflow --id=<WORKFLOW_ID>` / REST API.
+
+## Document Rules
+1. จะต้องเขียนรายงานสิ่งที่ไปทั้งหมดใน Artifact เอาไว้ รวมถึงสกิล, MCP ที่ใช้งาน
+2. บันทึกรายการ Local Conversations ของ Agent ไว้ทั้งหมดให้สามารถ Traceback ได้
