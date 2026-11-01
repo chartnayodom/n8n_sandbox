@@ -102,7 +102,12 @@ flowchart TD
 - `config`: แผ่นงานใหม่ที่สร้างขึ้น รองรับ Category: `SYSTEM`, `DRIVE_LINK`, `USER_ACCESS`
 
 ### 3.4 เวิร์กโฟลว์ n8n ที่บันทึกไว้ในโฟลเดอร์ `workflows/`
-- `01 - Google Sheets Outbound Email (Service Account) (3).json`: ดึงข้อมูลจากชีตส่งเมลหาลูกค้า
+- `01 - Google Sheets Outbound Email (Service Account) (3).json`:
+  - **[อัปเดตล่าสุด]:** เพิ่มระบบตรวจสอบรอบการส่ง Auto Email ล่วงหน้า 6 เดือน (R1: 91 - 180 วัน) และ 3 เดือน (R2: 1 - 90 วัน) อัตโนมัติ
+  - ตรวจสอบ `Mail_R1_Status` และ `Mail_R2_Status` ป้องกันการส่งซ้ำ หากรอบใดเคยส่งแล้ว (`Sent`) จะข้ามทันที
+  - สร้างหัวข้อ (Subject) และเนื้อหาอีเมลแยกตามรอบที่ส่ง
+  - อัปเดต `Mail_R1_Status` / `Mail_R1_Date` หรือ `Mail_R2_Status` / `Mail_R2_Date` กลับลงชีต `Master_Data` ตามรอบจริง
+  - ปรับปรุงรายงานสรุปผล (Summary Report) ให้แสดงสถิติการส่งสำเร็จแยกตามรอบ 6M และ 3M
 - `02 - Inbound Monitor & Auto-Forward (IMAP to SMTP) Updated (1).json`: ตรวจจับอีเมลขาเข้า ตรวจสอบ Whitelist และส่งต่อ
 - เวิร์กโฟลว์เวอร์ชันก่อนหน้าอื่นๆ ถูกจัดเก็บอยู่ในโฟลเดอร์ `workflows/` ทั้งหมด
 
