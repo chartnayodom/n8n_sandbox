@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 
 const INSURANCE_TYPES = ['ประกันสุขภาพกลุ่ม', 'ประกันชีวิตกลุ่ม', 'ประกันอุบัติเหตุกลุ่ม'];
+// ต้องตรงกับ CUSTOMER_STATUSES ฝั่ง server และค่าในชีต ('ยังไม่สนใจ' หยุด R2, 'ไม่ติดต่อ / ปิดงาน' หยุดทุกรอบ)
+const CUSTOMER_STATUSES = ['รอดำเนินการ', 'สนใจ / ดำเนินการต่อ', 'นัดหมายติดตาม', 'ยังไม่สนใจ', 'ไม่ติดต่อ / ปิดงาน'];
+const CUSTOMER_STATUS_HINTS = { 'ยังไม่สนใจ': ' (หยุดส่งอีเมลรอบ 3 เดือน)', 'ไม่ติดต่อ / ปิดงาน': ' (หยุดส่งอีเมลทุกรอบ)' };
 
 export default function App() {
   // Current User & Auth State
@@ -49,8 +52,12 @@ export default function App() {
   // Customer Modal (Add & Edit)
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
-  const emptyCustomerForm = { name: '', email: '', phone: '', type: '', policy: '', dataStatus: 'Valid', notes: '', expiry: '' };
+  const emptyCustomerForm = { name: '', email: '', phone: '', type: '', policy: '', dataStatus: 'Valid', customerStatus: '', notes: '', expiry: '' };
   const [customerForm, setCustomerForm] = useState(emptyCustomerForm);
+
+  // Renew Modal (ต่ออายุกรมธรรม์: เจ้าหน้าที่กรอกวันหมดอายุใหม่เอง)
+  const [renewTarget, setRenewTarget] = useState(null);
+  const [renewExpiry, setRenewExpiry] = useState('');
 
   // Template Modal (Add & Edit)
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
@@ -202,6 +209,23 @@ export default function App() {
     }
   };
 
+  // ปิดรายการ Needs Review (ไม่ส่งต่อ ไม่เพิ่มเข้า Master Data)
+  const handleCloseEmail = async (logId) => {
+    if (!window.confirm('ปิดรายการนี้โดยไม่ส่งต่อและไม่เพิ่มผู้ส่งเข้า Master Data ใช่หรือไม่?')) return;
+    try {
+      const res = await fetch(`/api/emails/${encodeURIComponent(logId)}/close`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        showToast('ปิดรายการเรียบร้อย');
+        fetchAllData();
+      } else {
+        showToast(data.error || 'ปิดรายการไม่สำเร็จ', 'error');
+      }
+    } catch (err) {
+      showToast('เกิดข้อผิดพลาด: ' + err.message, 'error');
+    }
+  };
+
   // Quick Whitelist sender from Needs Review
   const handleQuickWhitelist = async (senderEmail, customerName) => {
     try {
@@ -238,6 +262,27 @@ export default function App() {
       }
       showToast(editingCustomer ? 'แก้ไขข้อมูลลูกค้าสำเร็จ' : 'เพิ่มลูกค้าใหม่ลง Master Data เรียบร้อย');
       setIsCustomerModalOpen(false);
+      fetchAllData();
+    } catch (err) {
+      showToast('เกิดข้อผิดพลาด: ' + err.message, 'error');
+    }
+  };
+
+  const handleRenew = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await fetch(`/api/master-data/${renewTarget.id}/renew`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expiry: renewExpiry })
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error || 'ต่ออายุไม่สำเร็จ', 'error');
+        return;
+      }
+      showToast(`ต่ออายุ ${renewTarget.name || renewTarget.email} สำเร็จ ระบบจะเริ่มรอบแจ้งเตือนใหม่`);
+      setRenewTarget(null);
       fetchAllData();
     } catch (err) {
       showToast('เกิดข้อผิดพลาด: ' + err.message, 'error');
@@ -383,6 +428,12 @@ export default function App() {
     }
   };
 
+  const masterEmailSet = new Set(masterData.map(m => (m.email || '').trim().toLowerCase()));
+  const isForwarded = status => ['Sent', 'Forwarded', 'Manually Forwarded'].includes(status);
+  // Needs Review = อีเมลขาเข้าที่ผู้ส่งไม่อยู่ใน Master Data รอเจ้าหน้าที่ตรวจสอบ (เพิ่มเข้า Master Data / ส่งต่อเอง / ปิดรายการแล้วจะหายไป)
+  const isNeedsReview = item => item.status === 'Needs Review' && !masterEmailSet.has((item.recipientEmail || '').trim().toLowerCase());
+  const isPendingStatus = status => status === 'Pending' || status === 'Failed'; // ค้างส่ง / รอ Retry
+
   // Filter Emails
   const filteredEmails = emails.filter(item => {
     const q = searchQuery.toLowerCase();
@@ -394,20 +445,14 @@ export default function App() {
 
     if (!matchesSearch) return false;
 
-    if (inboxFilter === 'FORWARDED') return item.status === 'Sent' || item.status === 'Forwarded';
-    if (inboxFilter === 'REVIEW') return item.status === 'Needs Review' || item.status === 'Failed';
-    if (inboxFilter === 'PENDING') return item.status === 'Pending';
+    if (inboxFilter === 'FORWARDED') return isForwarded(item.status);
+    if (inboxFilter === 'REVIEW') return isNeedsReview(item);
+    if (inboxFilter === 'PENDING') return isPendingStatus(item.status);
 
     return true;
   });
 
-  // Needs Review emails (emails whose sender is not in Master Data)
-  const masterEmailSet = new Set(masterData.map(m => (m.email || '').toLowerCase()));
-  const needsReviewEmails = emails.filter(item => {
-    const isNeedsReviewStatus = item.status === 'Needs Review' || item.status === 'Failed';
-    const notInMaster = !masterEmailSet.has((item.recipientEmail || '').toLowerCase());
-    return isNeedsReviewStatus || notInMaster;
-  });
+  const needsReviewEmails = emails.filter(isNeedsReview);
 
   const pct = n => (dashboardData.metrics.total ? `${((n / dashboardData.metrics.total) * 100).toFixed(1)}%` : '0%');
 
@@ -966,7 +1011,7 @@ export default function App() {
                           <td className="p-3.5 text-slate-700 font-medium truncate max-w-xs">{item.subject}</td>
                           <td className="p-3.5">
                             <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
-                              item.status === 'Sent' || item.status === 'Forwarded' ? 'badge-sent' :
+                              isForwarded(item.status) ? 'badge-sent' :
                               item.status === 'Needs Review' ? 'badge-review' : 'badge-pending'
                             }`}>
                               {item.status || '-'}
@@ -1015,7 +1060,7 @@ export default function App() {
                       inboxFilter === 'FORWARDED' ? 'bg-white text-emerald-600 shadow-xs' : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    ส่งต่อแล้ว ({emails.filter(e => e.status === 'Sent' || e.status === 'Forwarded').length})
+                    ส่งต่อแล้ว ({emails.filter(e => isForwarded(e.status)).length})
                   </button>
                   <button
                     onClick={() => setInboxFilter('REVIEW')}
@@ -1031,7 +1076,7 @@ export default function App() {
                       inboxFilter === 'PENDING' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    รอดำเนินการ ({emails.filter(e => e.status === 'Pending').length})
+                    รอดำเนินการ ({emails.filter(e => isPendingStatus(e.status)).length})
                   </button>
                 </div>
               </div>
@@ -1055,7 +1100,7 @@ export default function App() {
                         <td className="p-3.5 text-slate-700 font-medium truncate max-w-sm">{item.subject}</td>
                         <td className="p-3.5">
                           <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
-                            item.status === 'Sent' || item.status === 'Forwarded' ? 'badge-sent' :
+                            isForwarded(item.status) ? 'badge-sent' :
                             item.status === 'Needs Review' ? 'badge-review' : 'badge-pending'
                           }`}>
                             {item.status || '-'}
@@ -1085,7 +1130,7 @@ export default function App() {
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">Needs Review (ไม่พบใน Master Data)</h2>
-                  <p className="text-xs text-slate-500">อีเมลที่มีหัวข้อตรงตามเงื่อนไขทำประกัน แต่ผู้ส่งยังไม่ได้อยู่ใน Whitelist</p>
+                  <p className="text-xs text-slate-500">อีเมลที่ส่งเข้ามา แต่อีเมลผู้ส่งไม่อยู่ใน Master Data เจ้าหน้าที่ต้องตรวจสอบก่อน (ตรวจสอบ → ส่งต่อ / เพิ่มเข้า Master Data / ปิดรายการ)</p>
                 </div>
                 <div className="bg-amber-50 text-amber-800 border border-amber-200 px-3 py-1.5 rounded-xl text-xs font-bold">
                   {needsReviewEmails.length} รายการรอการตรวจสอบ
@@ -1097,7 +1142,7 @@ export default function App() {
                   <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
                     <tr>
                       <th className="p-3.5 pl-5">วันที่/เวลา</th>
-                      <th className="p-3.5">อีเมลผู้รับ (ไม่อยู่ใน Master Data)</th>
+                      <th className="p-3.5">อีเมลผู้ส่ง (ไม่อยู่ใน Master Data)</th>
                       <th className="p-3.5">หัวข้ออีเมล</th>
                       <th className="p-3.5 text-right pr-5">การดำเนินการ</th>
                     </tr>
@@ -1120,6 +1165,12 @@ export default function App() {
                             className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold shadow-xs cursor-pointer"
                           >
                             + เพิ่มเข้า Master Data ทันที
+                          </button>
+                          <button
+                            onClick={() => handleCloseEmail(item.id)}
+                            className="px-3 py-1.5 border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-lg font-medium cursor-pointer"
+                          >
+                            ปิดรายการ
                           </button>
                         </td>
                       </tr>
@@ -1160,7 +1211,9 @@ export default function App() {
                       <th className="p-3.5">อีเมล (Whitelist)</th>
                       <th className="p-3.5">ชื่อ / หมายเหตุ</th>
                       <th className="p-3.5">ประเภทประกัน</th>
+                      <th className="p-3.5">วันหมดอายุ</th>
                       <th className="p-3.5 text-center">สถานะ</th>
+                      <th className="p-3.5 text-center">สถานะลูกค้า</th>
                       <th className="p-3.5 text-right pr-5">จัดการ</th>
                     </tr>
                   </thead>
@@ -1171,12 +1224,23 @@ export default function App() {
                         <td className="p-3.5 font-bold text-slate-800">{item.email}</td>
                         <td className="p-3.5 text-slate-700">{item.name || item.notes || '-'}</td>
                         <td className="p-3.5 text-slate-600">{item.type || '-'}</td>
+                        <td className="p-3.5 text-slate-600">{item.expiry || '-'}</td>
                         <td className="p-3.5 text-center">
                           <span className="badge-sent px-2.5 py-0.5 rounded-full font-bold text-[11px]">
                             {item.dataStatus || '-'}
                           </span>
                         </td>
+                        <td className="p-3.5 text-center text-slate-700">{item.customerStatus || '-'}</td>
                         <td className="p-3.5 text-right pr-5">
+                          <button
+                            onClick={() => {
+                              setRenewTarget(item);
+                              setRenewExpiry('');
+                            }}
+                            className="px-3 py-1 text-emerald-600 hover:bg-emerald-50 rounded-lg font-semibold cursor-pointer"
+                          >
+                            ต่ออายุ
+                          </button>
                           <button
                             onClick={() => {
                               setEditingCustomer(item);
@@ -1187,6 +1251,7 @@ export default function App() {
                                 type: item.type,
                                 policy: item.policy,
                                 dataStatus: item.dataStatus,
+                                customerStatus: item.customerStatus,
                                 notes: item.notes,
                                 expiry: item.expiry
                               });
@@ -1613,7 +1678,7 @@ export default function App() {
               </div>
               <div className="flex items-center gap-2">
                 <span className={`px-3 py-1 rounded-full text-xs font-bold ${
-                  selectedEmail.status === 'Sent' || selectedEmail.status === 'Forwarded' ? 'badge-sent' :
+                  isForwarded(selectedEmail.status) ? 'badge-sent' :
                   selectedEmail.status === 'Needs Review' ? 'badge-review' : 'badge-pending'
                 }`}>
                   {selectedEmail.status || '-'}
@@ -1748,14 +1813,39 @@ export default function App() {
                 </select>
               </div>
 
+              {editingCustomer && (
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">สถานะลูกค้า (หลังโทรติดตาม)</label>
+                  <select
+                    value={customerForm.customerStatus || ''}
+                    onChange={(e) => setCustomerForm({ ...customerForm, customerStatus: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">— ยังไม่ระบุ —</option>
+                    {CUSTOMER_STATUSES.map(st => (
+                      <option key={st} value={st}>{st}{CUSTOMER_STATUS_HINTS[st] || ''}</option>
+                    ))}
+                    {customerForm.customerStatus && !CUSTOMER_STATUSES.includes(customerForm.customerStatus) && (
+                      <option>{customerForm.customerStatus}</option>
+                    )}
+                  </select>
+                </div>
+              )}
+
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">วันหมดอายุความคุ้มครอง</label>
-                <input
-                  type="date"
-                  value={customerForm.expiry}
-                  onChange={(e) => setCustomerForm({ ...customerForm, expiry: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
-                />
+                {editingCustomer ? (
+                  <p className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-600">
+                    {customerForm.expiry || '-'} <span className="text-slate-400">(แก้ไขผ่านปุ่ม "ต่ออายุ" ในตารางเท่านั้น)</span>
+                  </p>
+                ) : (
+                  <input
+                    type="date"
+                    value={customerForm.expiry}
+                    onChange={(e) => setCustomerForm({ ...customerForm, expiry: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  />
+                )}
               </div>
 
               <div className="pt-3 flex justify-end gap-2 border-t border-slate-100">
@@ -1771,6 +1861,51 @@ export default function App() {
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-xs cursor-pointer"
                 >
                   บันทึกลง Google Sheet
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: RENEW (ต่ออายุกรมธรรม์)                                              */}
+      {/* ========================================================================= */}
+      {renewTarget && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-sm w-full p-6 border border-slate-200">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3 mb-4">
+              <h3 className="font-bold text-sm text-slate-800">ต่ออายุกรมธรรม์: {renewTarget.name || renewTarget.email}</h3>
+              <button onClick={() => setRenewTarget(null)} className="text-slate-400 hover:text-slate-600 cursor-pointer">✕</button>
+            </div>
+            <form onSubmit={handleRenew} className="space-y-3 text-xs">
+              <p className="text-slate-500">วันหมดอายุปัจจุบัน: <strong className="text-slate-700">{renewTarget.expiry || '-'}</strong></p>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">วันหมดอายุกรมธรรม์ใหม่ *</label>
+                <input
+                  type="date"
+                  required
+                  value={renewExpiry}
+                  onChange={(e) => setRenewExpiry(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <p className="text-[11px] text-amber-600 bg-amber-50 border border-amber-100 rounded-lg p-2">
+                การต่ออายุจะล้างสถานะการส่งอีเมลรอบ 6 และ 3 เดือน, สถานะลูกค้า และวันนัดติดตาม เพื่อเริ่มรอบแจ้งเตือนใหม่
+              </p>
+              <div className="pt-3 flex justify-end gap-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setRenewTarget(null)}
+                  className="px-4 py-2 border border-slate-200 text-slate-600 rounded-xl font-semibold hover:bg-slate-50 cursor-pointer"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-xs cursor-pointer"
+                >
+                  ยืนยันต่ออายุ
                 </button>
               </div>
             </form>

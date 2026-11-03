@@ -22,7 +22,7 @@
 * **การทำงาน:**
   1. ดึงข้อมูลรายการจาก **Google Sheets (Service Account)** หรือ **SQLite / Data Table**
   2. กรองข้อมูลเฉพาะรายการที่ครบกำหนดล่วงหน้า 3 เดือน (`due_date_to` / `insurance_date_to`) และสถานะยังไม่เคยส่ง
-  3. **ดึง Template อีเมลจากชีต `Templates`** (เลือกตามรอบ R1/R2 ด้วยชื่อ — รูปแบบชีตและตัวแปรดู [docs/email_templates_r1_r2.md](docs/email_templates_r1_r2.md)) ถ้าไม่พบ template workflow จะหยุดและแจ้ง error
+  3. **ดึง Template อีเมลจากชีต `Templates`** (เลือกตามรอบ R1/R2 ด้วยชื่อ — รูปแบบชีตและตัวแปรดู [docs/PROJECT_HANDOVER_AND_MIGRATION_GUIDE.md](docs/PROJECT_HANDOVER_AND_MIGRATION_GUIDE.md) หัวข้อ 3.3) ถ้าไม่พบ template workflow จะหยุดและแจ้ง error
   4. **Parallel Download:** ดาวน์โหลดเอกสารแนบคู่ขนานจาก Google Drive 2 ไฟล์ และส่งต่อ Binary Data เข้าสู่ลูป
   5. วนลูปส่งอีเมลรายบุคคลผ่าน **SMTP** พร้อมสร้าง Unique `Message-ID` (`mail_id`) สำหรับใช้อ้างอิงการตอบกลับ
   6. **Error Branching:**
@@ -142,6 +142,12 @@ n8n import:workflow --separate --input=./workflows/
 * **สาเหตุ:** ตั้งค่า `customEmailConfig: ["UNSEEN"]` แต่ช่อง `Post Process Action` ตั้งเป็น `nothing` ทำให้อีเมลฉบับเดิมยังคงสถานะไม่ได้อ่าน พอย้อนกลับมาตรวจใหม่จึงหยิบมาประมวลผลซ้ำ
 * **วิธีแก้ไข:**
   * ใน Node IMAP ให้เปลี่ยน **`Post Process Action`** เป็น **`Mark as Read` (ทำเครื่องหมายว่าอ่านแล้ว)**
+
+### ❓ 4. `npm install` ล้มเหลวด้วย `gyp ERR! find VS` (isolated-vm) หรือ `EBADENGINE`
+* **สาเหตุ:** n8n รุ่น 1.123.51+ และ 2.9.0+ ต้องใช้ Node 22 ขึ้นไป (ผ่าน `isolated-vm` 6.x) ถ้ารันบน Node 20 npm จะพยายาม compile จาก source แล้วล้มเหลวเพราะไม่มี Visual Studio C++
+* **วิธีแก้ไข:** โปรเจกต์นี้ pin `n8n` เป็น **2.8.4** (รุ่นล่าสุดที่รองรับ Node 20.19+ และยังใช้ได้กับ Node 22/24) ห้ามเปลี่ยนเป็น `^` หรือ `latest` ถ้ายังใช้ Node 20
+  * `overrides` ใน `package.json` (`@zenfs/core`, `utilium`) มีไว้ล็อก dependency ย่อยที่ลอยขึ้นไปรุ่นที่ต้องใช้ Node 22 ห้ามลบ
+  * เมื่อย้ายไป Node 22 ขึ้นไปทั้งหมดแล้ว สามารถอัปเกรด n8n และลบ `overrides` ได้
 
 ---
 

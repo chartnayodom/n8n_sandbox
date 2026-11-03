@@ -1,0 +1,23 @@
+{
+  "name": "n8n-email-automation",
+  "version": "1.0.0",
+  "description": "Automated Email & Google Sheets workflow with n8n",
+  "main": "index.js",
+  "scripts": {
+    "start": "n8n start",
+    "dev": "n8n start --tunnel",
+    "export:workflows": "n8n export:workflow --backup --output=./workflows/",
+    "import:workflows": "n8n import:workflow --separate --input=./workflows/"
+  },
+  "dependencies": {
+    "n8n": "2.8.4"
+  },
+  "overrides": {
+    "@zenfs/core": "2.3.8",
+    "utilium": "2.5.3"
+  },
+  "engines": {
+    "node": ">=20.19.0 <=24.x"
+  },
+  "private": true
+}

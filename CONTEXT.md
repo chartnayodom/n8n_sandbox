@@ -26,3 +26,10 @@ _Avoid_: due_date_to, insurance_date_to
 **Data Status**:
 บอกว่าข้อมูลของลูกค้ารายนั้นใช้ส่งอีเมลได้หรือไม่ ค่าที่ใช้คือ `Valid` (ใช้ได้) หรือ `Invalid` (ห้ามส่ง)
 _Avoid_: Active, Inactive
+
+**Needs Review**:
+อีเมลขาเข้าที่อีเมลผู้ส่งไม่อยู่ใน Master Data เจ้าหน้าที่ต้องตรวจสอบก่อนว่าจะส่งต่อให้บริษัทประกัน เพิ่มผู้ส่งเข้า Master Data หรือปิดรายการ รายการจะหายจากหน้า Needs Review เมื่อผู้ส่งอยู่ใน Master Data แล้ว หรือสถานะถูกเปลี่ยนเป็น `Manually Forwarded` / `Closed`
+_Avoid_: ใช้เรียกข้อมูลลูกค้าที่ไม่ถูกต้อง (นั่นคือ Data Status) หรืออีเมลที่ส่งไม่สำเร็จ (นั่นคือ `Failed`)
+
+**Email Log Status** (Send_Status ในชีต Email_Logs):
+`Sent` (ส่งถึงลูกค้า), `Forwarded` (ส่งต่อบริษัทประกันอัตโนมัติ), `Manually Forwarded` (เจ้าหน้าที่ส่งต่อเอง), `Needs Review`, `Pending` (รอส่ง เช่น ปิด Auto Forward), `Failed` (ส่งไม่สำเร็จ ค้างรอ Retry), `Closed` (เจ้าหน้าที่ปิดรายการ)

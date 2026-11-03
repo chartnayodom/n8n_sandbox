@@ -331,7 +331,10 @@ async function updateMasterData(id, item) {
     if (!item.email) throw new Error('กรุณาระบุอีเมล');
     assertEmailUnique(currentRows, item.email, found.id);
   }
+  // ตรวจเฉพาะเมื่อเปลี่ยนค่า (ค่าเดิมในชีตที่แก้มือจะไม่ทำให้บันทึกฟอร์มล้มเหลว)
+  if (item.customerStatus && item.customerStatus !== found.customerStatus) assertCustomerStatus(item.customerStatus);
 
+  // วันหมดอายุของลูกค้าเดิมแก้ผ่านปุ่ม "ต่ออายุ" เท่านั้น (renewMasterData) เพื่อให้ reset สถานะ R1/R2 เสมอ
   const updatedRow = [
     found.id,
     item.name !== undefined ? item.name : found.name,
@@ -339,7 +342,7 @@ async function updateMasterData(id, item) {
     item.phone !== undefined ? item.phone : found.phone,
     item.type !== undefined ? item.type : found.type,
     item.policy !== undefined ? item.policy : found.policy,
-    item.expiry !== undefined ? item.expiry : found.expiry,
+    found.expiry,
     item.dataStatus !== undefined ? item.dataStatus : found.dataStatus,
     found.reviewReason,
     found.mailR1Status,
@@ -361,6 +364,48 @@ async function updateMasterData(id, item) {
 
   logActivity('MASTER_DATA_UPDATE', `แก้ไขข้อมูลลูกค้า ID ${id} (${found.email})`, 'Admin');
   return { success: true, item: updatedRow };
+}
+
+// สถานะลูกค้าหลังโทรติดตาม (ตรงกับค่าในชีต Master_Data) n8n filter อ่านค่านี้แบบ includes:
+// มีคำว่า 'ไม่สนใจ' → หยุดส่ง R2, มีคำว่า 'ปิดงาน' → หยุดส่งทุกรอบ
+const CUSTOMER_STATUSES = ['รอดำเนินการ', 'สนใจ / ดำเนินการต่อ', 'นัดหมายติดตาม', 'ยังไม่สนใจ', 'ไม่ติดต่อ / ปิดงาน'];
+
+function assertCustomerStatus(status) {
+  if (!CUSTOMER_STATUSES.includes(status)) {
+    throw new Error(`สถานะลูกค้าไม่ถูกต้อง: ${status} (ใช้ได้: ${CUSTOMER_STATUSES.join(', ')})`);
+  }
+}
+
+// ต่ออายุ: เจ้าหน้าที่กรอกวันหมดอายุใหม่เอง (ISO yyyy-mm-dd) แล้ว reset รอบส่งเมลและสถานะติดตามเพื่อเริ่มรอบใหม่
+// เขียนเฉพาะเซลล์ที่เกี่ยวข้อง ไม่เขียนทับทั้งแถว เพื่อไม่ชนกับที่ n8n อัปเดตสถานะส่งเมลพร้อมกัน
+async function renewMasterData(id, expiry) {
+  const sheets = getSheetsClient();
+  if (!sheets) throw new Error('Google Sheets credentials not configured');
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(expiry || '') || isNaN(new Date(expiry).getTime())) {
+    throw new Error('กรุณาระบุวันหมดอายุกรมธรรม์ใหม่ให้ถูกต้อง');
+  }
+  const todayBkk = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' });
+  if (expiry <= todayBkk) throw new Error('วันหมดอายุใหม่ต้องเป็นวันในอนาคต');
+
+  const found = (await getMasterData()).find(r => r.id === String(id));
+  if (!found) throw new Error(`Customer with ID ${id} not found`);
+
+  const row = found._rowIndex;
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId: SPREADSHEET_ID(),
+    requestBody: {
+      valueInputOption: 'USER_ENTERED',
+      data: [
+        { range: `Master_Data!G${row}`, values: [[expiry]] },
+        { range: `Master_Data!J${row}:M${row}`, values: [['Pending', '', 'Pending', '']] },
+        { range: `Master_Data!N${row}:O${row}`, values: [['รอดำเนินการ', '']] }
+      ]
+    }
+  });
+
+  logActivity('MASTER_DATA_RENEW', `ต่ออายุลูกค้า ID ${id} (${found.email}) วันหมดอายุ ${found.expiry || '-'} → ${expiry}`, 'Admin');
+  return { success: true, expiry };
 }
 
 // ==========================================
@@ -420,6 +465,28 @@ async function addEmailLog(item) {
   return { success: true, log: newRow };
 }
 
+// เปลี่ยนสถานะของแถวใน Email_Logs (คอลัมน์ I = Send_Status) ใช้ปิดรายการ Needs Review
+const MANUAL_LOG_STATUSES = ['Closed', 'Manually Forwarded'];
+
+async function setEmailLogStatus(id, status) {
+  const sheets = getSheetsClient();
+  if (!sheets) throw new Error('Google Sheets credentials not configured');
+  if (!MANUAL_LOG_STATUSES.includes(status)) throw new Error(`สถานะไม่ถูกต้อง: ${status}`);
+
+  const target = (await getEmailLogs()).find(l => l.id === id);
+  if (!target) throw new Error(`Email Log ${id} not found`);
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SPREADSHEET_ID(),
+    range: `Email_Logs!I${target._rowIndex}`,
+    valueInputOption: 'RAW',
+    requestBody: { values: [[status]] }
+  });
+
+  logActivity('EMAIL_LOG_STATUS', `เปลี่ยนสถานะอีเมล ID ${id} (${target.subject}) เป็น ${status}`, 'Admin');
+  return { success: true, id, status };
+}
+
 async function reForwardEmail(id) {
   const logs = await getEmailLogs();
   const target = logs.find(l => l.id === id);
@@ -455,6 +522,9 @@ async function reForwardEmail(id) {
     subject: `Fwd: ${target.subject}`,
     status: 'Sent'
   });
+
+  // ส่งต่อจากรายการ Needs Review = เจ้าหน้าที่ยืนยันส่งต่อเอง → ปิดรายการเดิมเป็น Manually Forwarded
+  if (target.status === 'Needs Review') await setEmailLogStatus(id, 'Manually Forwarded');
 
   logActivity('RE_FORWARD', `ส่งต่ออีเมล ID ${id} (${target.subject}) ซ้ำไปยังบริษัทประกัน`, 'Admin');
   return { success: true, message: `ส่งต่ออีเมล ${id} สำเร็จ` };
@@ -581,9 +651,12 @@ async function getDashboardSummary() {
   ]);
 
   const total = logs.length;
-  const forwarded = logs.filter(l => l.status === 'Sent' || l.status === 'Forwarded').length;
-  const review = logs.filter(l => l.status === 'Needs Review' || l.status === 'Failed').length;
-  const pending = logs.filter(l => l.status === 'Pending').length;
+  // Needs Review = สถานะ Needs Review และผู้ส่งยังไม่อยู่ใน Master Data (เพิ่มเข้า Master Data แล้วรายการจะหายไปเอง)
+  // รอดำเนินการ = Pending + Failed (ค้างส่ง / รอ Retry)
+  const masterEmails = new Set(master.map(m => (m.email || '').trim().toLowerCase()));
+  const forwarded = logs.filter(l => ['Sent', 'Forwarded', 'Manually Forwarded'].includes(l.status)).length;
+  const review = logs.filter(l => l.status === 'Needs Review' && !masterEmails.has((l.recipientEmail || '').trim().toLowerCase())).length;
+  const pending = logs.filter(l => l.status === 'Pending' || l.status === 'Failed').length;
 
   return {
     metrics: { total, forwarded, review, pending },
@@ -602,9 +675,11 @@ module.exports = {
   getMasterData,
   addMasterData,
   updateMasterData,
+  renewMasterData,
   getEmailLogs,
   addEmailLog,
   reForwardEmail,
+  setEmailLogStatus,
   quickWhitelistSender,
   getTemplates,
   saveTemplate,

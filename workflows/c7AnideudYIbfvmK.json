@@ -1,5 +1,5 @@
 {
-  "name": "01 - Google Sheets Outbound Email (Service Account)",
+  "name": "01 - AutoMail Outbound R1/R2 (v2 Master_Data)",
   "nodes": [
     {
       "parameters": {
@@ -46,7 +46,7 @@
             },
             {
               "name": "sheet_name",
-              "value": "Sheet1"
+              "value": "Master_Data"
             },
             {
               "name": "template_name_r1",
@@ -55,6 +55,10 @@
             {
               "name": "template_name_r2",
               "value": "R2 - 3 เดือน"
+            },
+            {
+              "name": "test_recipient_email",
+              "value": ""
             }
           ],
           "number": [
@@ -87,10 +91,8 @@
         },
         "sheetName": {
           "__rl": true,
-          "value": "gid=0",
-          "mode": "list",
-          "cachedResultName": "Sheet1",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo/edit#gid=0"
+          "value": "Master_Data",
+          "mode": "name"
         },
         "filtersUI": {
           "values": []
@@ -114,7 +116,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// 3. กรองข้อมูล: ตรวจสอบวันหมดอายุ (Expiry_Date) รอบ 6 เดือน และรอบ 3 เดือน\nconst results = [];\nconst today = new Date();\ntoday.setHours(0, 0, 0, 0);\n\nfor (const item of $input.all()) {\n  const row = item.json;\n  \n  const name = row['Customer_Name'] || row['Name'] || row['ชื่อ'] || row['name'] || '';\n  const email = row['Email'] || row['email'] || row['อีเมล'] || '';\n  const expiryDateRaw = row['Expiry_Date'] || row['due_date_to'] || row['dueDate'] || row['insurance_date_to'] || '';\n  const policyNo = row['Policy_No'] || row['policy'] || '';\n  const insuranceType = row['Insurance_Type'] || row['type'] || 'ประกันภัย';\n  \n  const r1Status = (row['Mail_R1_Status'] || '').trim();\n  const r2Status = (row['Mail_R2_Status'] || '').trim();\n  const dataStatus = (row['Data_Status'] || 'Valid').trim();\n  \n  // ข้ามรายการที่ไม่มี email หรือถูกระบุว่า Invalid\n  if (!email || dataStatus === 'Invalid') {\n    continue;\n  }\n  \n  if (!expiryDateRaw) continue;\n  const expiryDate = new Date(expiryDateRaw);\n  if (isNaN(expiryDate.getTime())) continue;\n  expiryDate.setHours(0, 0, 0, 0);\n  \n  // คำนวณจำนวนวันก่อนหมดอายุ\n  const diffTime = expiryDate.getTime() - today.getTime();\n  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));\n  \n  let targetRound = null;\n  let roundLabel = '';\n  let monthsAhead = 0;\n  \n  // เกณฑ์รอบ 6 เดือน (R1): เหลือวันหมดอายุ 91 - 180 วัน (~3 ถึง 6 เดือน) และยังไม่เคยส่งรอบ R1\n  if (diffDays > 90 && diffDays <= 180) {\n    if (r1Status !== 'Sent' && r1Status !== 'สำเร็จ') {\n      targetRound = 'R1';\n      roundLabel = 'ล่วงหน้า 6 เดือน';\n      monthsAhead = 6;\n    }\n  }\n  // เกณฑ์รอบ 3 เดือน (R2): เหลือวันหมดอายุ 1 - 90 วัน (ภายใน 3 เดือน) และยังไม่เคยส่งรอบ R2\n  else if (diffDays > 0 && diffDays <= 90) {\n    if (r2Status !== 'Sent' && r2Status !== 'สำเร็จ') {\n      targetRound = 'R2';\n      roundLabel = 'ล่วงหน้า 3 เดือน';\n      monthsAhead = 3;\n    }\n  }\n  \n  if (targetRound) {\n    results.push({\n      json: {\n        ...row,\n        resolved_name: name || 'คุณลูกค้า',\n        resolved_email: email,\n        resolved_due_date: expiryDateRaw,\n        policy_no: policyNo,\n        insurance_type: insuranceType,\n        mail_round: targetRound,\n        round_label: roundLabel,\n        months_ahead: monthsAhead,\n        days_remaining: diffDays,\n        row_number: row.row_number || item.pairedItem?.item || null\n      }\n    });\n  }\n}\n\nreturn results;"
+        "jsCode": "// 3. กรองข้อมูล: ตรวจสอบวันหมดอายุ (Expiry_Date) รอบ 6 เดือน และรอบ 3 เดือน\nconst results = [];\nconst DAY_MS = 24 * 60 * 60 * 1000;\n\n// วันนี้ตามเวลาไทย (ไม่ขึ้นกับ timezone ของเครื่องที่รัน n8n) เก็บเป็น UTC midnight เพื่อเทียบจำนวนวันตรงๆ\nconst [ty, tm, td] = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' }).split('-').map(Number);\nconst todayMs = Date.UTC(ty, tm - 1, td);\n\n// อ่านวันที่จากชีต: รองรับ yyyy-mm-dd และ dd/mm/yyyy (รูปแบบไทย) รวมปี พ.ศ.\n// ถ้าเลขกลางเกิน 12 แต่เลขหน้าไม่เกิน 12 ถือว่าเป็น mm/dd/yyyy แล้วสลับให้ (ชีตตั้ง locale สหรัฐ)\nfunction parseSheetDate(raw) {\n  const s = String(raw).trim();\n  let y, m, d;\n  let hit = s.match(/^(\\d{4})-(\\d{1,2})-(\\d{1,2})/);\n  if (hit) { y = +hit[1]; m = +hit[2]; d = +hit[3]; }\n  else if ((hit = s.match(/^(\\d{1,2})[\\/.-](\\d{1,2})[\\/.-](\\d{4})/))) {\n    d = +hit[1]; m = +hit[2]; y = +hit[3];\n    if (m > 12 && d <= 12) [d, m] = [m, d];\n  } else return null;\n  if (y > 2400) y -= 543;\n  if (m < 1 || m > 12 || d < 1 || d > 31) return null;\n  return Date.UTC(y, m - 1, d);\n}\n\nfor (const item of $input.all()) {\n  const row = item.json;\n  \n  const name = row['Customer_Name'] || row['Name'] || row['ชื่อ'] || row['name'] || '';\n  const email = row['Email'] || row['email'] || row['อีเมล'] || '';\n  const expiryDateRaw = row['Expiry_Date'] || row['due_date_to'] || row['dueDate'] || row['insurance_date_to'] || '';\n  const policyNo = row['Policy_No'] || row['policy'] || '';\n  const insuranceType = row['Insurance_Type'] || row['type'] || 'ประกันภัย';\n  \n  const r1Status = (row['Mail_R1_Status'] || '').trim();\n  const r2Status = (row['Mail_R2_Status'] || '').trim();\n  const done = s => ['Sent', 'สำเร็จ', 'Skipped'].includes(s); // Skipped = ตั้งใจไม่ส่งรอบนั้น\n  const dataStatus = (row['Data_Status'] || 'Valid').trim();\n  // สถานะลูกค้าหลังโทรติดตาม (ตั้งจากหน้าเว็บ) เช่น 'ยังไม่สนใจ', 'ไม่ติดต่อ / ปิดงาน'\n  // 'ปิดงาน' หยุดทุกรอบ, 'ไม่สนใจ' หยุดเฉพาะรอบ 3 เดือน (R2)\n  const customerStatus = String(row['Customer_Status'] || row['customerStatus'] || '').replace(/\\s+/g, '');\n  const closed = customerStatus.includes('ปิดงาน');\n  const notInterested = customerStatus.includes('ไม่สนใจ');\n  \n  // ข้ามรายการที่ไม่มี email หรือถูกระบุว่า Invalid\n  // ส่งเฉพาะข้อมูลที่ Valid (ว่าง = Valid) ข้าม Invalid / Needs Review และลูกค้าที่ปิดงานแล้ว\n  if (!email || dataStatus !== 'Valid' || closed) {\n    continue;\n  }\n  \n  if (!expiryDateRaw) continue;\n  const expiryMs = parseSheetDate(expiryDateRaw);\n  if (expiryMs === null) continue;\n\n  // คำนวณจำนวนวันก่อนหมดอายุ\n  const diffDays = Math.round((expiryMs - todayMs) / DAY_MS);\n  \n  let targetRound = null;\n  let roundLabel = '';\n  let monthsAhead = 0;\n  \n  // เกณฑ์รอบ 6 เดือน (R1): เหลือวันหมดอายุ 91 - 180 วัน (~3 ถึง 6 เดือน) และยังไม่เคยส่งรอบ R1\n  if (diffDays > 90 && diffDays <= 180) {\n    if (!done(r1Status)) {\n      targetRound = 'R1';\n      roundLabel = 'ล่วงหน้า 6 เดือน';\n      monthsAhead = 6;\n    }\n  }\n  // เกณฑ์รอบ 3 เดือน (R2): เหลือวันหมดอายุ 1 - 90 วัน (ภายใน 3 เดือน) และยังไม่เคยส่งรอบ R2\n  else if (diffDays > 0 && diffDays <= 90) {\n    if (!done(r2Status) && !notInterested) {\n      targetRound = 'R2';\n      roundLabel = 'ล่วงหน้า 3 เดือน';\n      monthsAhead = 3;\n    }\n  }\n  \n  if (targetRound) {\n    results.push({\n      json: {\n        ...row,\n        resolved_name: name || 'คุณลูกค้า',\n        resolved_email: email,\n        resolved_due_date: expiryDateRaw,\n        policy_no: policyNo,\n        customer_id: row['ID'] || row['id'] || row['No'] || row['No.'] || '',\n        insurance_type: insuranceType,\n        mail_round: targetRound,\n        round_label: roundLabel,\n        months_ahead: monthsAhead,\n        days_remaining: diffDays,\n        row_number: row.row_number || item.pairedItem?.item || null\n      }\n    });\n  }\n}\n\nreturn results;"
       },
       "id": "e4f8d21b-3001-4b1a-9876-000000000005",
       "name": "3. Filter due_date_to (3 Months) & Unsent",
@@ -141,7 +143,7 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// 4.1-4.2 เติมค่าลงใน Template ที่ดึงจากชีต Templates (ดู node \"Pick Templates\")\n// ตัวแปรที่ใช้ใน template ได้: {{customerName}} {{policyNo}} {{bookingNo}} {{policyExpiry}} {{insuranceType}}\n//                              {{roundLabel}} {{monthsAhead}} {{driveLinks}} {{referenceId}}\nconst record = $input.item.json;\nconst tpl = $('Pick Templates').first().json[record.mail_round]; // R1 | R2\n\n// สร้าง Message-ID เฉพาะสำหรับใช้อ้างอิง\nconst customMessageId = `<n8n-${Date.now()}-${Math.random().toString(36).substring(2, 9)}@automail.internal>`;\n\nconst file1 = $('Download file1').first().binary?.data;\nconst file2 = $('Download file').first().binary?.data1;\n\nconst policyNo = record.policy_no || 'POL-REF';\nconst vars = {\n  customerName: record.resolved_name,\n  policyNo,\n  bookingNo: policyNo,\n  policyExpiry: record.resolved_due_date,\n  insuranceType: record.insurance_type || 'ประกันภัย',\n  roundLabel: record.round_label,\n  monthsAhead: record.months_ahead,\n  driveLinks: [file1, file2].filter(Boolean).map(f => f.fileName).join(', '),\n  referenceId: customMessageId\n};\n\nconst esc = s => s.replace(/[&<>\"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[ch]));\nconst fill = (text, escape) => text.replace(/\\{\\{\\s*(\\w+)\\s*\\}\\}/g, (_, k) => {\n  const v = String(vars[k] ?? '');\n  return escape ? esc(v) : v;\n});\n\nreturn {\n  json: {\n    ...record,\n    mail_subject: fill(tpl.subject, false),\n    mail_html: fill(tpl.html, true),\n    generated_message_id: customMessageId,\n    sent_date: new Date().toISOString().split('T')[0]\n  },\n  binary: { data: file1, data1: file2 }\n};"
+        "jsCode": "// 4.1-4.2 เติมค่าลงใน Template ที่ดึงจากชีต Templates (ดู node \"Pick Templates\")\n// ตัวแปรที่ใช้ใน template ได้: {{customerName}} {{policyNo}} {{bookingNo}} {{policyExpiry}} {{insuranceType}}\n//                              {{roundLabel}} {{monthsAhead}} {{driveLinks}} {{referenceId}}\nconst record = $input.item.json;\n// โหมดทดสอบ: ถ้า Global Config.test_recipient_email ไม่ว่าง จะส่งทุกฉบับไปที่อีเมลนั้นแทนอีเมลลูกค้า\nconst testTo = String($('Global Config').first().json.test_recipient_email || '').trim();\nconst tpl = $('Pick Templates').first().json[record.mail_round]; // R1 | R2\n\n// สร้าง Message-ID เฉพาะสำหรับใช้อ้างอิง\nconst customMessageId = `<n8n-${Date.now()}-${Math.random().toString(36).substring(2, 9)}@automail.internal>`;\n\nconst file1 = $('Download file1').first().binary?.data;\nconst file2 = $('Download file').first().binary?.data1;\n\nconst policyNo = record.policy_no || 'POL-REF';\nconst vars = {\n  customerName: record.resolved_name,\n  policyNo,\n  bookingNo: policyNo,\n  policyExpiry: record.resolved_due_date,\n  insuranceType: record.insurance_type || 'ประกันภัย',\n  roundLabel: record.round_label,\n  monthsAhead: record.months_ahead,\n  driveLinks: [file1, file2].filter(Boolean).map(f => f.fileName).join(', '),\n  referenceId: customMessageId\n};\n\nconst esc = s => s.replace(/[&<>\"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[ch]));\nconst fill = (text, escape) => text.replace(/\\{\\{\\s*(\\w+)\\s*\\}\\}/g, (_, k) => {\n  const v = String(vars[k] ?? '');\n  return escape ? esc(v) : v;\n});\n\nreturn {\n  json: {\n    ...record,\n    mail_subject: (testTo ? '[TEST] ' : '') + fill(tpl.subject, false),\n    send_to: testTo || record.resolved_email,\n    mail_html: fill(tpl.html, true),\n    generated_message_id: customMessageId,\n    sent_date: new Date().toISOString().split('T')[0]\n  },\n  binary: { data: file1, data1: file2 }\n};"
       },
       "id": "e4f8d21b-3001-4b1a-9876-000000000007",
       "name": "4.1-4.2 Build Mail Template",
@@ -155,7 +157,7 @@
     {
       "parameters": {
         "fromEmail": "={{ $('Global Config').item.json.sender_email }}",
-        "toEmail": "={{ $json.resolved_email }}",
+        "toEmail": "={{ $json.send_to }}",
         "subject": "={{ $json.mail_subject }}",
         "html": "={{ $json.mail_html }}",
         "options": {
@@ -193,10 +195,8 @@
         },
         "sheetName": {
           "__rl": true,
-          "value": "gid=0",
-          "mode": "list",
-          "cachedResultName": "Sheet1",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo/edit#gid=0"
+          "value": "Master_Data",
+          "mode": "name"
         },
         "columns": {
           "mappingMode": "defineBelow",
@@ -296,10 +296,8 @@
         },
         "sheetName": {
           "__rl": true,
-          "value": "gid=0",
-          "mode": "list",
-          "cachedResultName": "Sheet1",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo/edit#gid=0"
+          "value": "Master_Data",
+          "mode": "name"
         },
         "columns": {
           "mappingMode": "defineBelow",
@@ -525,175 +523,6 @@
     },
     {
       "parameters": {
-        "dataTableId": {
-          "__rl": true,
-          "value": "PucRQYaLxohRq0kC",
-          "mode": "list",
-          "cachedResultName": "email_log",
-          "cachedResultUrl": "/projects/GFB7AqunQAahZz4U/datatables/PucRQYaLxohRq0kC"
-        },
-        "columns": {
-          "mappingMode": "defineBelow",
-          "value": {
-            "email_id": "={{ $json.messageId }}",
-            "cust_name": "={{ $('4. For Loop Each Record').item.json.Name }}",
-            "email": "={{ $('4. For Loop Each Record').item.json.Email }}",
-            "mail_send_status": "success"
-          },
-          "matchingColumns": [],
-          "schema": [
-            {
-              "id": "cust_name",
-              "displayName": "cust_name",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "readOnly": false,
-              "removed": false
-            },
-            {
-              "id": "email",
-              "displayName": "email",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "readOnly": false,
-              "removed": false
-            },
-            {
-              "id": "mail_send_status",
-              "displayName": "mail_send_status",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "readOnly": false,
-              "removed": false
-            },
-            {
-              "id": "error_message",
-              "displayName": "error_message",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "readOnly": false,
-              "removed": true
-            },
-            {
-              "id": "email_id",
-              "displayName": "email_id",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "readOnly": false,
-              "removed": false
-            }
-          ],
-          "attemptToConvertTypes": false,
-          "convertFieldsToString": false
-        },
-        "options": {}
-      },
-      "type": "n8n-nodes-base.dataTable",
-      "typeVersion": 1.1,
-      "position": [
-        2496,
-        320
-      ],
-      "id": "f97e1dd0-49db-4243-82cc-b68cd48d869d",
-      "name": "Insert row"
-    },
-    {
-      "parameters": {
-        "dataTableId": {
-          "__rl": true,
-          "value": "PucRQYaLxohRq0kC",
-          "mode": "list",
-          "cachedResultName": "email_log",
-          "cachedResultUrl": "/projects/GFB7AqunQAahZz4U/datatables/PucRQYaLxohRq0kC"
-        },
-        "columns": {
-          "mappingMode": "defineBelow",
-          "value": {
-            "cust_name": "={{ $('4. For Loop Each Record').item.json.Name }}",
-            "email": "={{ $('4. For Loop Each Record').item.json.Email }}",
-            "mail_send_status": "failed",
-            "error_message": "={{ $json.error }}",
-            "email_id": "={{ $json.messageId }}"
-          },
-          "matchingColumns": [],
-          "schema": [
-            {
-              "id": "cust_name",
-              "displayName": "cust_name",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "readOnly": false,
-              "removed": false
-            },
-            {
-              "id": "email",
-              "displayName": "email",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "readOnly": false,
-              "removed": false
-            },
-            {
-              "id": "mail_send_status",
-              "displayName": "mail_send_status",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "readOnly": false,
-              "removed": false
-            },
-            {
-              "id": "error_message",
-              "displayName": "error_message",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "readOnly": false,
-              "removed": false
-            },
-            {
-              "id": "email_id",
-              "displayName": "email_id",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "readOnly": false,
-              "removed": false
-            }
-          ],
-          "attemptToConvertTypes": false,
-          "convertFieldsToString": false
-        },
-        "options": {}
-      },
-      "type": "n8n-nodes-base.dataTable",
-      "typeVersion": 1.1,
-      "position": [
-        2496,
-        816
-      ],
-      "id": "66b6d53f-9401-412e-af79-a85ef12cec52",
-      "name": "Insert row1"
-    },
-    {
-      "parameters": {
         "authentication": "serviceAccount",
         "documentId": {
           "__rl": true,
@@ -727,7 +556,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// เลือก Template ของรอบ R1/R2 จากชีต Templates (ค้นด้วยคอลัมน์ name; ชื่อกำหนดใน Global Config)\n// หัวคอลัมน์แถวที่ 1 ของชีต: id, name, subject, recipientType, status, description, htmlContent\nconst cfg = $('Global Config').first().json;\nconst rows = $input.all().map(i => i.json);\n\nconst need = ['name', 'subject', 'status', 'htmlContent'];\nconst have = Object.keys(rows[0] || {});\nconst missing = need.filter(k => !have.includes(k));\nif (missing.length) {\n  throw new Error(`ชีต Templates: ไม่พบหัวคอลัมน์ [${missing.join(', ')}] (หัวที่พบ: ${have.join(', ') || 'ไม่มีข้อมูล'})`);\n}\n\nconst pick = round => {\n  const name = cfg[`template_name_${round.toLowerCase()}`];\n  const row = rows.find(r => String(r.name || '').trim() === name);\n  if (!row) throw new Error(`ชีต Templates: ไม่พบ template ชื่อ \"${name}\" (รอบ ${round})`);\n  if ((row.status || 'Active').trim() !== 'Active') throw new Error(`ชีต Templates: template \"${name}\" ไม่ได้เป็น Active`);\n  if (!row.subject || !row.htmlContent) throw new Error(`ชีต Templates: template \"${name}\" ไม่มี subject หรือ htmlContent`);\n  return { subject: row.subject, html: row.htmlContent };\n};\n\nreturn [{ json: { R1: pick('R1'), R2: pick('R2') } }];"
+        "jsCode": "// เลือก Template ของรอบ R1/R2 จากชีต Templates (ค้นด้วยคอลัมน์ Template_Name; ชื่อกำหนดใน Global Config)\n// หัวคอลัมน์แถวที่ 1 ของชีต: Template_ID, Template_Name, Subject, Recipient_Type, Status, Description, HTML_Content\nconst cfg = $('Global Config').first().json;\nconst rows = $input.all().map(i => i.json);\n\nconst need = ['Template_Name', 'Subject', 'Status', 'HTML_Content'];\nconst have = Object.keys(rows[0] || {});\nconst missing = need.filter(k => !have.includes(k));\nif (missing.length) {\n  throw new Error(`ชีต Templates: ไม่พบหัวคอลัมน์ [${missing.join(', ')}] (หัวที่พบ: ${have.join(', ') || 'ไม่มีข้อมูล'})`);\n}\n\nconst pick = round => {\n  const name = cfg[`template_name_${round.toLowerCase()}`];\n  const row = rows.find(r => String(r.Template_Name || '').trim() === name);\n  if (!row) throw new Error(`ชีต Templates: ไม่พบ template ชื่อ \"${name}\" (รอบ ${round})`);\n  if ((row.Status || 'Active').trim() !== 'Active') throw new Error(`ชีต Templates: template \"${name}\" ไม่ได้เป็น Active`);\n  if (!row.Subject || !row.HTML_Content) throw new Error(`ชีต Templates: template \"${name}\" ไม่มี Subject หรือ HTML_Content`);\n  return { subject: row.Subject, html: row.HTML_Content };\n};\n\nreturn [{ json: { R1: pick('R1'), R2: pick('R2') } }];"
       },
       "id": "d800f6d5-34c5-4390-8bfe-ee4838e60f90",
       "name": "Pick Templates",
@@ -737,6 +566,312 @@
         512,
         224
       ]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo",
+          "mode": "list",
+          "cachedResultName": "automail_test",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Email_Logs",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Log_ID": "={{ 'LOG-' + Date.now() + '-' + ($('4.1-4.2 Build Mail Template').item.json.row_number || '') }}",
+            "Sent_Timestamp": "={{ $now.setZone('Asia/Bangkok').toFormat('yyyy-MM-dd HH:mm:ss') }}",
+            "Customer_ID": "={{ $('4.1-4.2 Build Mail Template').item.json.customer_id || $('4.1-4.2 Build Mail Template').item.json.row_number || '' }}",
+            "Customer_Name": "={{ $('4.1-4.2 Build Mail Template').item.json.resolved_name }}",
+            "Recipient_Email": "={{ $('4.1-4.2 Build Mail Template').item.json.send_to }}",
+            "Mail_Round": "={{ 'ครั้งที่ ' + ($('4.1-4.2 Build Mail Template').item.json.mail_round === 'R1' ? 1 : 2) + ' (' + $('4.1-4.2 Build Mail Template').item.json.round_label + ')' }}",
+            "Subject": "={{ $('4.1-4.2 Build Mail Template').item.json.mail_subject }}",
+            "Message_ID": "={{ $json.messageId || $('4.1-4.2 Build Mail Template').item.json.generated_message_id }}",
+            "Send_Status": "Sent",
+            "Error_Detail": ""
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Log_ID",
+              "displayName": "Log_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Sent_Timestamp",
+              "displayName": "Sent_Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Customer_ID",
+              "displayName": "Customer_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Customer_Name",
+              "displayName": "Customer_Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Recipient_Email",
+              "displayName": "Recipient_Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Mail_Round",
+              "displayName": "Mail_Round",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Subject",
+              "displayName": "Subject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Message_ID",
+              "displayName": "Message_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Send_Status",
+              "displayName": "Send_Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Error_Detail",
+              "displayName": "Error_Detail",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "9fb9e09a-7a4d-4adb-9595-2529a28c5719",
+      "name": "Append Email_Logs (Sent)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2496,
+        192
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "apU1LNQcR7cMOpnJ",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo",
+          "mode": "list",
+          "cachedResultName": "automail_test",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Email_Logs",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Log_ID": "={{ 'LOG-' + Date.now() + '-' + ($('4.1-4.2 Build Mail Template').item.json.row_number || '') }}",
+            "Sent_Timestamp": "={{ $now.setZone('Asia/Bangkok').toFormat('yyyy-MM-dd HH:mm:ss') }}",
+            "Customer_ID": "={{ $('4.1-4.2 Build Mail Template').item.json.customer_id || $('4.1-4.2 Build Mail Template').item.json.row_number || '' }}",
+            "Customer_Name": "={{ $('4.1-4.2 Build Mail Template').item.json.resolved_name }}",
+            "Recipient_Email": "={{ $('4.1-4.2 Build Mail Template').item.json.send_to }}",
+            "Mail_Round": "={{ 'ครั้งที่ ' + ($('4.1-4.2 Build Mail Template').item.json.mail_round === 'R1' ? 1 : 2) + ' (' + $('4.1-4.2 Build Mail Template').item.json.round_label + ')' }}",
+            "Subject": "={{ $('4.1-4.2 Build Mail Template').item.json.mail_subject }}",
+            "Message_ID": "={{ $('4.1-4.2 Build Mail Template').item.json.generated_message_id }}",
+            "Send_Status": "Failed",
+            "Error_Detail": "={{ typeof $json.error === 'string' ? $json.error : ($json.error?.message || 'SMTP Error') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Log_ID",
+              "displayName": "Log_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Sent_Timestamp",
+              "displayName": "Sent_Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Customer_ID",
+              "displayName": "Customer_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Customer_Name",
+              "displayName": "Customer_Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Recipient_Email",
+              "displayName": "Recipient_Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Mail_Round",
+              "displayName": "Mail_Round",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Subject",
+              "displayName": "Subject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Message_ID",
+              "displayName": "Message_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Send_Status",
+              "displayName": "Send_Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Error_Detail",
+              "displayName": "Error_Detail",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "883087d9-4b15-484f-8acc-006fa1d6a67a",
+      "name": "Append Email_Logs (Failed)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2496,
+        1008
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "apU1LNQcR7cMOpnJ",
+          "name": "Google Service Account account"
+        }
+      }
     }
   ],
   "pinData": {},
@@ -834,7 +969,7 @@
             "index": 0
           },
           {
-            "node": "Insert row",
+            "node": "Append Email_Logs (Sent)",
             "type": "main",
             "index": 0
           }
@@ -846,7 +981,7 @@
             "index": 0
           },
           {
-            "node": "Insert row1",
+            "node": "Append Email_Logs (Failed)",
             "type": "main",
             "index": 0
           }
@@ -984,6 +1119,5 @@
     "instanceId": "2e633fffb0ea72f35ba674745e8461d60f71e2fc37f19249685deaefdcecb3e2"
   },
   "nodeGroups": [],
-  "id": "c7AnideudYIbfvmK",
   "tags": []
 }

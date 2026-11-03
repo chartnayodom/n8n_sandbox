@@ -12,9 +12,11 @@ const {
   getMasterData,
   addMasterData,
   updateMasterData,
+  renewMasterData,
   getEmailLogs,
   addEmailLog,
   reForwardEmail,
+  setEmailLogStatus,
   quickWhitelistSender,
   getTemplates,
   saveTemplate,
@@ -132,6 +134,16 @@ app.put('/api/master-data/:id', async (req, res) => {
   }
 });
 
+app.post('/api/master-data/:id/renew', async (req, res) => {
+  try {
+    const result = await renewMasterData(req.params.id, req.body.expiry);
+    res.json(result);
+  } catch (err) {
+    console.error('Error renewing customer:', err);
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // ==========================================
 // 3. EMAIL LOGS & ACTIONS
 // ==========================================
@@ -165,6 +177,16 @@ app.post('/api/emails/re-forward', async (req, res) => {
   } catch (err) {
     console.error('Error re-forwarding email:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ปิดรายการ Needs Review (ไม่ส่งต่อ ไม่เพิ่มเข้า Master Data)
+app.post('/api/emails/:id/close', async (req, res) => {
+  try {
+    res.json(await setEmailLogStatus(req.params.id, 'Closed'));
+  } catch (err) {
+    console.error('Error closing email log:', err);
+    res.status(400).json({ error: err.message });
   }
 });
 

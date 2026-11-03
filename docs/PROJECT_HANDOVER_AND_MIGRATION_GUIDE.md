@@ -101,14 +101,38 @@ flowchart TD
 - `Templates`: เทมเพลตอีเมลและโค้ด HTML
 - `config`: แผ่นงานใหม่ที่สร้างขึ้น รองรับ Category: `SYSTEM`, `DRIVE_LINK`, `USER_ACCESS`
 
+**หัวคอลัมน์แถวที่ 1 ในชีตจริง (ตรวจแล้วเมื่อ 2026-11-03)** เว็บอ่านด้วยตำแหน่งคอลัมน์ แต่ n8n อ่านด้วยชื่อหัว ห้ามเปลี่ยนชื่อหัวโดยไม่แก้ workflow:
+- `Master_Data` (A:Q): `ID, Customer_Name, Email, Phone, Insurance_Type, Policy_No, Expiry_Date, Data_Status, Review_Reason, Mail_R1_Status, Mail_R1_Date, Mail_R2_Status, Mail_R2_Date, Customer_Status, Next_Followup_Date, Assigned_Agent, Notes`
+  - `Data_Status` ต้องเป็น `Valid` (หรือว่าง) จึงจะส่งเมล `Invalid` / `Needs Review` ถูกข้าม
+  - `Mail_R1/R2_Status`: `Sent`/`สำเร็จ`/`Skipped` = ไม่ส่งรอบนั้นอีก, `Pending`/ว่าง = ยังส่งได้
+  - `Customer_Status`: `รอดำเนินการ`, `สนใจ / ดำเนินการต่อ`, `นัดหมายติดตาม`, `ยังไม่สนใจ` (หยุดส่ง R2), `ไม่ติดต่อ / ปิดงาน` (หยุดส่งทุกรอบ)
+- `Email_Logs` (A:K): `Log_ID, Sent_Timestamp, Customer_ID, Customer_Name, Recipient_Email, Mail_Round, Subject, Message_ID, Send_Status, Error_Detail, Original_Body` (เว็บอ่านถึงคอลัมน์ J; `Original_Body` คอลัมน์ K เก็บเนื้อหาอีเมลขาเข้าไว้ให้ Re-forward)
+  - workflow 01 (ส่งออก) เพิ่มแถว `Send_Status` = `Sent` / `Failed`
+  - workflow 02 (ขาเข้า) เพิ่มแถว `Forwarded` / `Failed` / `Needs Review` โดย `Recipient_Email` = อีเมลผู้ส่งของอีเมลขาเข้า
+- `Call_Logs` (A:J): `Call_ID, Call_Timestamp, Customer_ID, Customer_Name, Phone, Agent_Name, Call_Result, Customer_Interest, Next_Appointment, Call_Notes` (เว็บยังไม่ได้ใช้)
+- `Templates` (A:G): `Template_ID, Template_Name, Subject, Recipient_Type, Status, Description, HTML_Content` workflow เลือก template รอบ R1/R2 จาก `Template_Name` = `R1 - 6 เดือน` / `R2 - 3 เดือน` (ตั้งชื่อใน `Global Config`) ซึ่งเพิ่มไว้แล้วเป็น `TPL-05` / `TPL-06` ตัวแปรที่ใช้ได้: `{{customerName}} {{policyNo}} {{policyExpiry}} {{insuranceType}} {{roundLabel}} {{monthsAhead}} {{driveLinks}}` (`{{customerName}}` ใช้ชื่อตามชีตตรงๆ ไม่ต้องใส่คำว่า "คุณ" นำหน้า)
+
+**โหมดทดสอบการส่งอีเมล:** ตั้ง `test_recipient_email` ใน node `Global Config` เป็นอีเมลที่ต้องการ ทุกฉบับจะถูกส่งไปอีเมลนั้นแทนอีเมลลูกค้า และ subject จะขึ้นต้นด้วย `[TEST]` (log ใน `Email_Logs` บันทึกอีเมลที่ส่งจริง) ปล่อยว่าง = ส่งถึงลูกค้าจริง
+
 ### 3.4 เวิร์กโฟลว์ n8n ที่บันทึกไว้ในโฟลเดอร์ `workflows/`
-- `c7AnideudYIbfvmK.json`:
+- `c7AnideudYIbfvmK.json` (ชื่อใน n8n: `01 - AutoMail Outbound R1/R2 (v2 Master_Data)` ไฟล์นี้ไม่มี `id` เมื่อ import จะสร้างเป็น workflow ใหม่ ไม่ทับของเดิม และ `active: false`):
   - **[อัปเดตล่าสุด]:** เพิ่มระบบตรวจสอบรอบการส่ง Auto Email ล่วงหน้า 6 เดือน (R1: 91 - 180 วัน) และ 3 เดือน (R2: 1 - 90 วัน) อัตโนมัติ
   - ตรวจสอบ `Mail_R1_Status` และ `Mail_R2_Status` ป้องกันการส่งซ้ำ หากรอบใดเคยส่งแล้ว (`Sent`) จะข้ามทันที
   - สร้างหัวข้อ (Subject) และเนื้อหาอีเมลแยกตามรอบที่ส่ง
   - อัปเดต `Mail_R1_Status` / `Mail_R1_Date` หรือ `Mail_R2_Status` / `Mail_R2_Date` กลับลงชีต `Master_Data` ตามรอบจริง
   - ปรับปรุงรายงานสรุปผล (Summary Report) ให้แสดงสถิติการส่งสำเร็จแยกตามรอบ 6M และ 3M
-- `a14U6Ep5Yxt4eZH1.json`: ตรวจจับอีเมลขาเข้า ตรวจสอบ Whitelist และส่งต่อ
+- `02-AutoMail-Inbound-Router.json` (ชื่อใน n8n: `02 - AutoMail Inbound Router (Master_Data → Insurance / Needs Review)` ไม่มี `id` และ `active: false`) แทนที่ `a14U6Ep5Yxt4eZH1.json` และ workflow 02 เวอร์ชันเก่าทั้งหมด:
+  - **Flow A (IMAP Trigger):** อ่านอีเมลใหม่ (UNSEEN, ทำเครื่องหมายอ่านแล้ว) → เทียบอีเมลผู้ส่งกับ `Master_Data`
+    - **ผู้ส่งอยู่ใน `Master_Data`** → ส่งต่อไป `insurance_email` (ชีต `config`) พร้อมไฟล์แนบ และตั้ง Reply-To เป็นผู้ส่งเดิม → บันทึก `Email_Logs` สถานะ `Forwarded` (ส่งไม่สำเร็จ = `Failed`)
+      - ถ้า `auto_forward` ในชีต `config` เป็น FALSE → ไม่ส่ง บันทึกสถานะ `Pending` รอเจ้าหน้าที่กด "ส่งต่ออีกครั้ง"
+      - ถ้ายังไม่ได้ตั้ง `insurance_email` → บันทึกสถานะ `Failed` พร้อมเหตุผล
+    - **ผู้ส่งไม่อยู่ใน `Master_Data` = Needs Review** (นิยามเดียวของ Needs Review) → ไม่ส่งต่อ บันทึกสถานะ `Needs Review` ให้เจ้าหน้าที่ตรวจสอบก่อน ไม่กรองด้วยหัวข้ออีเมล (เมลที่ไม่ต้องการให้เข้าหน้านี้ ให้ใส่ผู้ส่งไว้ใน `ignore_senders` ของ `Global Config`)
+    - ข้ามอีเมลที่ผู้ส่งอยู่ใน `ignore_senders` / เป็นอีเมลบริษัทประกัน และอีเมลที่ Message-ID อยู่ใน `Email_Logs` แล้ว
+    - ถ้าตั้ง `review_alert_email` ใน `Global Config` จะส่งอีเมลแจ้งเตือนเมื่อมีรายการ Needs Review
+  - **Flow B (Webhook `POST /webhook/re-forward`):** รับคำสั่ง Re-forward จากปุ่มบนเว็บ ส่งเนื้อหาที่เก็บใน `Original_Body` ไปยัง `insurance_email` จาก `config` เสมอ (ไม่ใช้ปลายทางที่มากับ request) เว็บเป็นฝ่ายเพิ่มแถว log เอง ไฟล์แนบเดิมไม่ถูกส่งซ้ำ
+  - **โหมดทดสอบ:** ตั้ง `test_forward_email` ใน `Global Config` (และ `Re-forward Config` สำหรับ Flow B) ทุกฉบับจะถูกส่งไปอีเมลนั้นแทนบริษัทประกัน และ subject ขึ้นต้นด้วย `[TEST]` ปล่อยว่าง = ส่งไป `insurance_email` จริง (ปัจจุบันในชีต `config` เป็นค่าตัวอย่าง)
+  - ค่าใน `config`: `n8n_webhook_url` ต้องชี้ production URL ของ webhook นี้ (ตอนนี้เป็น `http://localhost:5678/webhook/re-forward` ใช้ได้เมื่อ workflow เปิด Active และเว็บเรียกจากเครื่องที่เข้าถึง n8n ได้)
+- workflow 01 เลิกเขียน n8n Data Table `email_log` แล้ว (workflow 02 ใหม่ใช้ `Email_Logs` แทน)
 - เวิร์กโฟลว์เวอร์ชันก่อนหน้าอื่นๆ ถูกจัดเก็บอยู่ในโฟลเดอร์ `workflows/` ทั้งหมด
 
 ---
