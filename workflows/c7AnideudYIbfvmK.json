@@ -1,5 +1,6 @@
 {
   "name": "01 - AutoMail Outbound R1/R2 (v2 Master_Data)",
+  "id": "AutoMailOutbound",
   "nodes": [
     {
       "parameters": {

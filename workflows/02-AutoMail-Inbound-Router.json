@@ -1,4 +1,5 @@
 {
+  "id": "AutoMailInbound2",
   "name": "02 - AutoMail Inbound Router (Master_Data → Insurance / Needs Review)",
   "nodes": [
     {
@@ -9,7 +10,7 @@
           "customEmailConfig": "[\"UNSEEN\"]"
         }
       },
-      "id": "ba2cc28c-cbff-43fe-8e4a-8e7f73c061fc",
+      "id": "0b0202a1-f1c1-4b6c-9917-abf9019505a0",
       "name": "Listener: IMAP Email Trigger",
       "type": "n8n-nodes-base.emailReadImap",
       "typeVersion": 2,
@@ -29,25 +30,25 @@
         "assignments": {
           "assignments": [
             {
-              "id": "77569a81-a533-460d-9ea5-f29153421e79",
+              "id": "bd44dfa5-5f72-4038-bc15-5c72c3e6fe73",
               "name": "sender_email",
               "value": "baipor_insurance@hotmail.com",
               "type": "string"
             },
             {
-              "id": "88d37c5b-92e0-4d4c-ad7e-cf99072590b7",
+              "id": "92587ecf-7a4b-4737-9935-05c40dca1e3d",
               "name": "ignore_senders",
               "value": "porinsurance@gmail.com, baipor_insurance@hotmail.com",
               "type": "string"
             },
             {
-              "id": "3fd847a4-d610-4292-b6af-3ba8429d5454",
+              "id": "2a59da53-4b5d-4184-a8e3-8368b289be65",
               "name": "test_forward_email",
               "value": "",
               "type": "string"
             },
             {
-              "id": "e1b0dbb4-426c-4078-b243-311192f336b6",
+              "id": "48288ce1-d396-46f8-aeb8-a4a2b6cdbde3",
               "name": "review_alert_email",
               "value": "",
               "type": "string"
@@ -56,7 +57,7 @@
         },
         "options": {}
       },
-      "id": "015376a3-c3c6-4dd5-8d06-2abbb867348a",
+      "id": "5421fc48-eb37-418e-ac6e-9f171c0e817e",
       "name": "Global Config",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
@@ -83,7 +84,7 @@
         },
         "options": {}
       },
-      "id": "85bab297-56ff-4ab7-a35b-ef38a0cf853e",
+      "id": "2b003eb1-f33d-4963-a564-5d189f550bf8",
       "name": "Read config",
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
@@ -117,7 +118,7 @@
         },
         "options": {}
       },
-      "id": "a7aecc2d-3740-47c2-9c2c-ee89e38ed56a",
+      "id": "63bf9ad9-6a3d-4e67-9210-f6f0e5fdc221",
       "name": "Read Master_Data",
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
@@ -151,7 +152,7 @@
         },
         "options": {}
       },
-      "id": "064dc7e8-f30f-43f3-94ad-137b2dbbc65b",
+      "id": "ea285609-2d1a-4236-be89-be1377c2d64e",
       "name": "Read Email_Logs",
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
@@ -170,15 +171,105 @@
     },
     {
       "parameters": {
-        "jsCode": "// แยกอีเมลขาเข้าตาม Flow 2:\n//   ผู้ส่งอยู่ใน Master_Data     → forward ไปบริษัทประกัน (ถ้าปิด Auto Forward = Pending, ถ้ายังไม่ตั้ง insurance_email = Failed)\n//   ผู้ส่งไม่อยู่ใน Master_Data  → Needs Review ให้เจ้าหน้าที่ตรวจสอบ (นิยามเดียวของ Needs Review)\n//   ผู้ส่งอยู่ในรายการละเว้น / เมลที่เคยประมวลผลแล้ว → ข้าม\n// ข้อมูลที่ใช้: Global Config (ค่าคงที่), config (insurance_email, auto_forward), Master_Data (ผู้ส่งที่อนุญาต), Email_Logs (กันประมวลผลซ้ำ + จับ Reply)\nconst cfg = $('Global Config').first().json;\nconst csv = s => String(s || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);\nconst clean = s => String(s || '').replace(/[<>]/g, '').trim();\nconst esc = s => String(s ?? '').replace(/[&<>\"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[ch]));\n\n// --- config sheet (Category = SYSTEM) ---\nconst sys = {};\nfor (const i of $('Read config').all()) {\n  const r = i.json;\n  if (String(r.Category || '').trim().toUpperCase() === 'SYSTEM') sys[String(r.Key || '').trim()] = String(r.Value || '').trim();\n}\nconst insuranceEmail = sys.insurance_email || '';\nconst autoForward = String(sys.auto_forward || 'TRUE').trim().toUpperCase() !== 'FALSE';\nconst testTo = String(cfg.test_forward_email || '').trim(); // ไม่ว่าง = โหมดทดสอบ forward ไปอีเมลนี้แทนบริษัทประกัน\nconst forwardTo = testTo || insuranceEmail;\n\nconst ignoreSenders = new Set(csv(cfg.ignore_senders));\nif (insuranceEmail) ignoreSenders.add(insuranceEmail.toLowerCase());\n\n// --- Master_Data / Email_Logs ---\nconst master = new Map();\nfor (const i of $('Read Master_Data').all()) {\n  const e = String(i.json.Email || '').trim().toLowerCase();\n  if (e) master.set(e, i.json);\n}\nconst logged = new Set();\nfor (const i of $('Read Email_Logs').all()) {\n  const id = clean(i.json.Message_ID);\n  if (id) logged.add(id);\n}\n\nconst results = [];\nfor (const item of $('Listener: IMAP Email Trigger').all()) {\n  const mail = item.json;\n  const from = mail.from?.value?.[0] || {};\n  const addr = String(from.address || '').trim().toLowerCase();\n  const subject = String(mail.subject || '').trim();\n  const messageId = clean(mail.messageId || mail.headers?.['message-id']);\n\n  // Reply ของอีเมลที่ระบบเคยส่ง (In-Reply-To / References ตรงกับ Message_ID ใน Email_Logs)\n  const refs = [].concat(mail.inReplyTo || mail.headers?.['in-reply-to'] || [], mail.references || mail.headers?.references || [])\n    .join(' ').split(/\\s+/).map(clean).filter(Boolean);\n  const isReplyToOurs = refs.some(r => logged.has(r));\n  const lowerSubject = subject.toLowerCase();\n\n  // route: ignore | forward | review | hold   (hold = ผู้ส่งอยู่ใน Master Data แต่ส่งต่อไม่ได้ในตอนนี้)\n  let route = 'ignore';\n  let reason = '';\n  let logStatus = '';\n  const row = master.get(addr);\n\n  if (!addr) reason = 'ไม่มีอีเมลผู้ส่ง';\n  else if (ignoreSenders.has(addr)) reason = 'ผู้ส่งอยู่ในรายการละเว้น';\n  else if (messageId && logged.has(messageId)) reason = 'ประมวลผลแล้ว';\n  else if (row) {\n    if (!autoForward) { route = 'hold'; logStatus = 'Pending'; reason = 'ปิด Auto Forward ในหน้าตั้งค่าระบบ รอเจ้าหน้าที่ส่งต่อ'; }\n    else if (!forwardTo) { route = 'hold'; logStatus = 'Failed'; reason = 'ยังไม่ได้ตั้งค่าอีเมลบริษัทประกัน (config: insurance_email)'; }\n    else { route = 'forward'; reason = 'พบอีเมลผู้ส่งใน Master Data'; }\n  } else {\n    route = 'review'; logStatus = 'Needs Review';\n    reason = isReplyToOurs ? 'ตอบกลับอีเมลที่ระบบส่ง แต่ไม่พบอีเมลผู้ส่งใน Master Data' : 'ไม่พบอีเมลผู้ส่งใน Master Data';\n  }\n  if (route === 'ignore') continue;\n\n  const binary = item.binary || {};\n  const attachNames = Object.keys(binary);\n  const bodyHtml = mail.html || `<pre style=\"white-space: pre-wrap; font-family: inherit;\">${esc(mail.text || '(ไม่มีข้อความ)')}</pre>`;\n  const customer = row\n    ? `<p style=\"margin: 2px 0;\"><strong>ลูกค้า:</strong> ${esc(row.Customer_Name)} (${esc(row.Insurance_Type || '-')})</p>\n       <p style=\"margin: 2px 0;\"><strong>เลขที่กรมธรรม์:</strong> ${esc(row.Policy_No || '-')} &nbsp; <strong>วันหมดอายุ:</strong> ${esc(row.Expiry_Date || '-')}</p>`\n    : '';\n  const forwardHtml = `\n<div style=\"font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #222;\">\n  <div style=\"background-color: #e8f0fe; border-left: 4px solid #1a73e8; padding: 12px 16px; margin-bottom: 16px;\">\n    <strong>[AutoMail] ส่งต่ออัตโนมัติ</strong>${testTo ? ' <span style=\"color:#b45309;\">(โหมดทดสอบ)</span>' : ''}<br/>\n    <span style=\"font-size: 12px;\">${esc(reason)}</span>\n  </div>\n  <div style=\"background-color: #f8f9fa; border: 1px solid #ddd; padding: 12px 16px; margin-bottom: 16px; font-size: 13px;\">\n    ${customer}\n    <p style=\"margin: 2px 0;\"><strong>From:</strong> ${esc(mail.from?.text || addr)}</p>\n    <p style=\"margin: 2px 0;\"><strong>Date:</strong> ${esc(mail.date || '')}</p>\n    <p style=\"margin: 2px 0;\"><strong>Subject:</strong> ${esc(subject)}</p>\n    ${attachNames.length ? `<p style=\"margin: 2px 0;\"><strong>ไฟล์แนบ:</strong> ${attachNames.length} ไฟล์</p>` : ''}\n  </div>\n  <div>${bodyHtml}</div>\n</div>`;\n\n  results.push({\n    json: {\n      route,\n      reason,\n      log_status: logStatus,\n      log_round: route === 'review' ? 'Needs Review (อีเมลขาเข้า)' : 'อีเมลขาเข้า (ยังไม่ได้ส่งต่อ)',\n      test_mode: Boolean(testTo),\n      from_email: addr,\n      from_name: from.name || '',\n      subject,\n      message_id: messageId,\n      customer_id: row?.ID || '',\n      customer_name: row?.Customer_Name || from.name || addr,\n      forward_to: forwardTo,\n      forward_subject: (testTo ? '[TEST] ' : '') + (lowerSubject.startsWith('fwd:') ? subject : `Fwd: ${subject}`),\n      forward_html: forwardHtml,\n      attach_names: attachNames.join(', '),\n      log_id: `LOG-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,\n      // เก็บเนื้อหาไว้ใน Email_Logs (คอลัมน์ Original_Body) เพื่อให้ปุ่ม Re-forward ส่งซ้ำได้ (จำกัดความยาวของเซลล์ Google Sheets)\n      original_body: bodyHtml.slice(0, 40000),\n      review_alert_email: String(cfg.review_alert_email || '').trim()\n    },\n    binary\n  });\n}\nreturn results;"
+        "jsCode": "// แยกอีเมลขาเข้าตาม Flow 2 (แผนภาพ Auto mail flowchart):\n//   ส่งต่อบริษัทประกัน = ผู้ส่งอยู่ใน Master_Data และ (เป็น Reply ของอีเมลที่ระบบส่ง หรือ หัวข้อมี prefix ตาม config: subject_prefixes)\n//     - ถ้าปิด Auto Forward = Pending (รอเจ้าหน้าที่ส่งต่อ), ถ้ายังไม่ตั้ง insurance_email = Failed\n//   นอกนั้นทั้งหมด = Needs Review (ผู้ส่งไม่อยู่ใน Master_Data, หรืออยู่แต่ไม่ใช่ Reply และหัวข้อไม่มี prefix)\n//   ข้าม: ผู้ส่งอยู่ในรายการละเว้น / เป็นบริษัทประกัน / เมลที่ Message-ID อยู่ใน Email_Logs แล้ว\nconst cfg = $('Global Config').first().json;\nconst csv = s => String(s || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);\nconst clean = s => String(s || '').replace(/[<>]/g, '').trim();\nconst esc = s => String(s ?? '').replace(/[&<>\"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[ch]));\n\n// --- config sheet (Category = SYSTEM) ---\nconst sys = {};\nfor (const i of $('Read config').all()) {\n  const r = i.json;\n  if (String(r.Category || '').trim().toUpperCase() === 'SYSTEM') sys[String(r.Key || '').trim()] = String(r.Value || '').trim();\n}\nconst insuranceEmail = sys.insurance_email || '';\nconst autoForward = String(sys.auto_forward || 'TRUE').trim().toUpperCase() !== 'FALSE';\nconst prefixes = csv(sys.subject_prefixes);\nconst folderId = sys.attachment_folder_id || ''; // โฟลเดอร์ Google Drive เก็บไฟล์แนบ (ว่าง = ไม่เก็บ)\nconst testTo = String(cfg.test_forward_email || '').trim(); // ไม่ว่าง = โหมดทดสอบ forward ไปอีเมลนี้แทนบริษัทประกัน\nconst forwardTo = testTo || insuranceEmail;\n\nconst ignoreSenders = new Set(csv(cfg.ignore_senders));\nif (insuranceEmail) ignoreSenders.add(insuranceEmail.toLowerCase());\n\n// --- Master_Data / Email_Logs ---\nconst master = new Map();\nfor (const i of $('Read Master_Data').all()) {\n  const e = String(i.json.Email || '').trim().toLowerCase();\n  if (e) master.set(e, i.json);\n}\nconst logged = new Set();\nfor (const i of $('Read Email_Logs').all()) {\n  const id = clean(i.json.Message_ID);\n  if (id) logged.add(id);\n}\n\nconst results = [];\nfor (const item of $('Listener: IMAP Email Trigger').all()) {\n  const mail = item.json;\n  const from = mail.from?.value?.[0] || {};\n  const addr = String(from.address || '').trim().toLowerCase();\n  const subject = String(mail.subject || '').trim();\n  const lowerSubject = subject.toLowerCase();\n  const messageId = clean(mail.messageId || mail.headers?.['message-id']);\n\n  // Reply ของอีเมลที่ระบบเคยส่ง: In-Reply-To / References ตรงกับ Message_ID ใน Email_Logs\n  const refs = [].concat(mail.inReplyTo || mail.headers?.['in-reply-to'] || [], mail.references || mail.headers?.references || [])\n    .join(' ').split(/\\s+/).map(clean).filter(Boolean);\n  const isReply = refs.some(r => logged.has(r));\n  const matchedPrefix = prefixes.find(p => lowerSubject.includes(p));\n\n  // route: ignore | forward | review | hold   (hold = ผ่านเงื่อนไขส่งต่อ แต่ส่งต่อไม่ได้ในตอนนี้)\n  let route = 'ignore';\n  let reason = '';\n  let logStatus = '';\n  const row = master.get(addr);\n\n  if (!addr) reason = 'ไม่มีอีเมลผู้ส่ง';\n  else if (ignoreSenders.has(addr)) reason = 'ผู้ส่งอยู่ในรายการละเว้น';\n  else if (messageId && logged.has(messageId)) reason = 'ประมวลผลแล้ว';\n  else if (!row) {\n    route = 'review'; logStatus = 'Needs Review';\n    reason = isReply ? 'ตอบกลับอีเมลที่ระบบส่ง แต่ไม่พบอีเมลผู้ส่งใน Master Data' : 'ไม่พบอีเมลผู้ส่งใน Master Data';\n  } else if (!isReply && !matchedPrefix) {\n    route = 'review'; logStatus = 'Needs Review';\n    reason = prefixes.length\n      ? 'ผู้ส่งอยู่ใน Master Data แต่ไม่ใช่การตอบกลับ และหัวข้อไม่มี prefix ที่กำหนด'\n      : 'ผู้ส่งอยู่ใน Master Data แต่ยังไม่ได้ตั้งค่า prefix หัวข้อ (config: subject_prefixes)';\n  } else {\n    const via = isReply ? 'ตอบกลับอีเมลที่ระบบส่ง' : `หัวข้อมี prefix \"${matchedPrefix}\"`;\n    if (!autoForward) { route = 'hold'; logStatus = 'Pending'; reason = `${via} แต่ปิด Auto Forward รอเจ้าหน้าที่ส่งต่อ`; }\n    else if (!forwardTo) { route = 'hold'; logStatus = 'Failed'; reason = 'ยังไม่ได้ตั้งค่าอีเมลบริษัทประกัน (config: insurance_email)'; }\n    else { route = 'forward'; reason = `พบผู้ส่งใน Master Data และ${via}`; }\n  }\n  if (route === 'ignore') continue;\n\n  const binary = item.binary || {};\n  const attachNames = Object.keys(binary);\n  const bodyHtml = mail.html || `<pre style=\"white-space: pre-wrap; font-family: inherit;\">${esc(mail.text || '(ไม่มีข้อความ)')}</pre>`;\n  const customer = row\n    ? `<p style=\"margin: 2px 0;\"><strong>ลูกค้า:</strong> ${esc(row.Customer_Name)} (${esc(row.Insurance_Type || '-')})</p>\n       <p style=\"margin: 2px 0;\"><strong>เลขที่กรมธรรม์:</strong> ${esc(row.Policy_No || '-')} &nbsp; <strong>วันหมดอายุ:</strong> ${esc(row.Expiry_Date || '-')}</p>`\n    : '';\n  const forwardHtml = `\n<div style=\"font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #222;\">\n  <div style=\"background-color: #e8f0fe; border-left: 4px solid #1a73e8; padding: 12px 16px; margin-bottom: 16px;\">\n    <strong>[AutoMail] ส่งต่ออัตโนมัติ</strong>${testTo ? ' <span style=\"color:#b45309;\">(โหมดทดสอบ)</span>' : ''}<br/>\n    <span style=\"font-size: 12px;\">${esc(reason)}</span>\n  </div>\n  <div style=\"background-color: #f8f9fa; border: 1px solid #ddd; padding: 12px 16px; margin-bottom: 16px; font-size: 13px;\">\n    ${customer}\n    <p style=\"margin: 2px 0;\"><strong>From:</strong> ${esc(mail.from?.text || addr)}</p>\n    <p style=\"margin: 2px 0;\"><strong>Date:</strong> ${esc(mail.date || '')}</p>\n    <p style=\"margin: 2px 0;\"><strong>Subject:</strong> ${esc(subject)}</p>\n    ${attachNames.length ? `<p style=\"margin: 2px 0;\"><strong>ไฟล์แนบ:</strong> ${attachNames.length} ไฟล์</p>` : ''}\n  </div>\n  <div>${bodyHtml}</div>\n</div>`;\n\n  results.push({\n    json: {\n      route,\n      reason,\n      log_status: logStatus,\n      log_round: route === 'review' ? 'Needs Review (อีเมลขาเข้า)' : 'อีเมลขาเข้า (ยังไม่ได้ส่งต่อ)',\n      test_mode: Boolean(testTo),\n      from_email: addr,\n      from_name: from.name || '',\n      subject,\n      message_id: messageId,\n      customer_id: row?.ID || '',\n      customer_name: row?.Customer_Name || from.name || addr,\n      forward_to: forwardTo,\n      forward_subject: (testTo ? '[TEST] ' : '') + (lowerSubject.startsWith('fwd:') ? subject : `Fwd: ${subject}`),\n      forward_html: forwardHtml,\n      attach_names: attachNames.join(', '),\n      // รายการไฟล์แนบ (ลำดับ ชื่อ ชนิด ขนาด) เก็บลง Email_Logs ให้เว็บเปิดไฟล์จากกล่องจดหมายด้วย Message-ID ตามลำดับนี้\n      attachments_meta: JSON.stringify(Object.values(binary).map((b, i) => ({ index: i, name: b.fileName || ('attachment_' + i), mimeType: b.mimeType || 'application/octet-stream', size: b.fileSize || '' }))),\n      folder_id: folderId,\n      log_id: `LOG-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,\n      // เก็บเนื้อหาไว้ใน Email_Logs (คอลัมน์ Original_Body) เพื่อให้ปุ่ม Re-forward ส่งซ้ำได้ (จำกัดความยาวของเซลล์ Google Sheets)\n      original_body: bodyHtml.slice(0, 40000),\n      review_alert_email: String(cfg.review_alert_email || '').trim()\n    },\n    binary\n  });\n}\nreturn results;"
       },
-      "id": "dc02606c-e7eb-4782-9cd0-185ff35554c7",
+      "id": "956ad324-2e48-431a-8b90-8611e515d0b9",
       "name": "Route Inbound Mail",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         1200,
         0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// แยกไฟล์แนบของแต่ละอีเมลเป็น 1 item ต่อ 1 ไฟล์ เพื่ออัปโหลดเข้า Google Drive (โฟลเดอร์จาก config: attachment_folder_id)\n// ถ้าไม่มีไฟล์ต้องเก็บเลย ส่ง item { skip: true } ตัวเดียว เพื่อให้ flow ไปต่อที่ Collect Attachments โดยไม่ผ่านการอัปโหลด\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n  if (!j.folder_id) continue;\n  for (const [key, bin] of Object.entries(item.binary || {})) {\n    const fileName = bin.fileName || key;\n    out.push({\n      json: {\n        log_id: j.log_id,\n        folder_id: j.folder_id,\n        file_name: fileName,\n        drive_name: `${j.log_id}_${fileName}`,\n        mime_type: bin.mimeType || 'application/octet-stream',\n        size: bin.fileSize || ''\n      },\n      binary: { data: bin }\n    });\n  }\n}\nreturn out.length ? out : [{ json: { skip: true } }];"
+      },
+      "id": "05c082f4-ec03-469a-8e94-4ff7a44f9cd4",
+      "name": "Split Attachments",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        420
+      ],
+      "notes": "สำรอง ไม่ได้เชื่อมต่อ: อัปโหลดไฟล์แนบเข้า Google Drive (ตอนนี้เว็บเปิดไฟล์จากกล่องจดหมายด้วย Message-ID แทน) ถ้าจะใช้: ต่อ Route Inbound Mail → Split Attachments และ Collect Attachments → Is Forward? แล้วเปลี่ยนการอ้างอิงใน node Log ทั้ง 3 เป็น Collect Attachments และคอลัมน์ Attachments เป็นค่า attachments",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "55a1ba70-c0da-4578-bc13-5b42ebabd98e",
+              "leftValue": "={{ $json.skip === true }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f8000bd9-4322-42f3-946d-d4d98bff869f",
+      "name": "Nothing To Save?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1440,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "name": "={{ $json.drive_name }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.folder_id }}"
+        },
+        "inputDataFieldName": "data",
+        "options": {}
+      },
+      "id": "924e16b8-9372-416a-9bc8-15e486d0f168",
+      "name": "Upload to Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1680,
+        540
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "ต้องใช้ credential Google Drive OAuth2 ของบัญชีผู้ใช้ (Service Account ไม่มีพื้นที่ อัปโหลดไม่ได้) และแชร์โฟลเดอร์ให้อีเมล Service Account อ่านได้ เพื่อให้เว็บแสดงไฟล์",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// รวมผลอัปโหลดไฟล์แนบกลับเข้าอีเมลแต่ละฉบับ (ผูกด้วย log_id) แล้วส่งอีเมลต่อพร้อม binary เดิม (ใช้แนบตอน forward)\n// attachments = JSON [{ id, name, mimeType, size }] เก็บลงคอลัมน์ Attachments ของ Email_Logs ให้เว็บแสดงตัวอย่างไฟล์ได้\nconst tryAll = name => { try { return $(name).all(); } catch (e) { return []; } }; // node ที่ไม่ได้ทำงานในรอบนี้\nconst splits = tryAll('Split Attachments');\nconst uploads = tryAll('Upload to Drive');\n\nconst saved = {};\nconst failed = {};\nuploads.forEach((u, i) => {\n  const s = splits[u.pairedItem?.item ?? i]?.json;\n  if (!s || s.skip) return;\n  if (u.json.id) (saved[s.log_id] ||= []).push({ id: u.json.id, name: s.file_name, mimeType: s.mime_type, size: s.size });\n  else (failed[s.log_id] ||= []).push(s.file_name);\n});\n\nreturn $('Route Inbound Mail').all().map(r => {\n  const j = r.json;\n  let note = '';\n  if (failed[j.log_id]) note = `บันทึกไฟล์แนบลง Google Drive ไม่สำเร็จ: ${failed[j.log_id].join(', ')}`;\n  else if (!j.folder_id && j.attach_names) note = 'ไม่ได้บันทึกไฟล์แนบ: ยังไม่ได้ตั้งค่าโฟลเดอร์ (config: attachment_folder_id)';\n  return {\n    json: { ...j, attachments: JSON.stringify(saved[j.log_id] || []), attachment_note: note },\n    binary: r.binary\n  };\n});"
+      },
+      "id": "8c21663e-aacc-4f22-8c2e-da3a688a1fe7",
+      "name": "Collect Attachments",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        420
       ]
     },
     {
@@ -192,7 +283,7 @@
           },
           "conditions": [
             {
-              "id": "d7caa651-5c12-4cda-81ff-4d72e9b149b7",
+              "id": "e5959a71-7fa5-42fd-a969-922d0d026282",
               "leftValue": "={{ $json.route }}",
               "rightValue": "forward",
               "operator": {
@@ -205,7 +296,7 @@
         },
         "options": {}
       },
-      "id": "0d82ceab-d127-4ede-a937-f33b529a475a",
+      "id": "da21c3d8-7b00-4ad0-8470-5fa4f4b43ae1",
       "name": "Is Forward?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
@@ -224,9 +315,12 @@
           "appendAttribution": false,
           "replyTo": "={{ $json.from_email }}",
           "fileAttachments": "={{ $json.attach_names }}"
+        },
+        "extra": {
+          "onError": "continueErrorOutput"
         }
       },
-      "id": "ab22c207-4651-4eef-b3f7-216d7200cb18",
+      "id": "e158f5f4-7b7e-478f-98b0-39731719a8a3",
       "name": "Forward to Insurance (SMTP)",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
@@ -271,7 +365,8 @@
             "Message_ID": "={{ $('Route Inbound Mail').item.json.message_id }}",
             "Send_Status": "Forwarded",
             "Error_Detail": "={{ $('Route Inbound Mail').item.json.test_mode ? 'ทดสอบ: ส่งไป ' + $('Route Inbound Mail').item.json.forward_to : '' }}",
-            "Original_Body": "={{ $('Route Inbound Mail').item.json.original_body }}"
+            "Original_Body": "={{ $('Route Inbound Mail').item.json.original_body }}",
+            "Attachments": "={{ $('Route Inbound Mail').item.json.attachments_meta }}"
           },
           "matchingColumns": [],
           "schema": [
@@ -384,6 +479,16 @@
               "type": "string",
               "canBeUsedToMatch": true,
               "removed": false
+            },
+            {
+              "id": "Attachments",
+              "displayName": "Attachments",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
             }
           ],
           "attemptToConvertTypes": false,
@@ -391,7 +496,7 @@
         },
         "options": {}
       },
-      "id": "571188f6-a905-40b2-a6dc-9e0f53143a5a",
+      "id": "d9b13b36-a770-4048-9004-5f76cdea0cb6",
       "name": "Log Forwarded",
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
@@ -435,7 +540,8 @@
             "Message_ID": "={{ $('Route Inbound Mail').item.json.message_id }}",
             "Send_Status": "Failed",
             "Error_Detail": "={{ typeof $json.error === 'string' ? $json.error : ($json.error?.message || 'SMTP Error') }}",
-            "Original_Body": "={{ $('Route Inbound Mail').item.json.original_body }}"
+            "Original_Body": "={{ $('Route Inbound Mail').item.json.original_body }}",
+            "Attachments": "={{ $('Route Inbound Mail').item.json.attachments_meta }}"
           },
           "matchingColumns": [],
           "schema": [
@@ -548,6 +654,16 @@
               "type": "string",
               "canBeUsedToMatch": true,
               "removed": false
+            },
+            {
+              "id": "Attachments",
+              "displayName": "Attachments",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
             }
           ],
           "attemptToConvertTypes": false,
@@ -555,7 +671,7 @@
         },
         "options": {}
       },
-      "id": "17bffc4e-7297-4ac0-ac88-b529bd70f263",
+      "id": "e6ca54be-a225-478b-827a-b979dd6ccfd0",
       "name": "Log Forward Failed",
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
@@ -599,7 +715,8 @@
             "Message_ID": "={{ $('Route Inbound Mail').item.json.message_id }}",
             "Send_Status": "={{ $('Route Inbound Mail').item.json.log_status }}",
             "Error_Detail": "={{ $('Route Inbound Mail').item.json.reason }}",
-            "Original_Body": "={{ $('Route Inbound Mail').item.json.original_body }}"
+            "Original_Body": "={{ $('Route Inbound Mail').item.json.original_body }}",
+            "Attachments": "={{ $('Route Inbound Mail').item.json.attachments_meta }}"
           },
           "matchingColumns": [],
           "schema": [
@@ -712,6 +829,16 @@
               "type": "string",
               "canBeUsedToMatch": true,
               "removed": false
+            },
+            {
+              "id": "Attachments",
+              "displayName": "Attachments",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
             }
           ],
           "attemptToConvertTypes": false,
@@ -719,7 +846,7 @@
         },
         "options": {}
       },
-      "id": "3a20d48a-32db-4cd6-9e45-5763257cc0ce",
+      "id": "27d84545-b8fd-47be-9c6d-e317f51e9ab2",
       "name": "Log Not Forwarded",
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
@@ -745,7 +872,7 @@
           },
           "conditions": [
             {
-              "id": "aba85b98-a240-4476-8691-186c3224e680",
+              "id": "b03cf1bf-d0ab-4806-890d-df59446b4e69",
               "leftValue": "={{ $('Route Inbound Mail').item.json.route === 'review' ? $('Route Inbound Mail').item.json.review_alert_email : '' }}",
               "operator": {
                 "type": "string",
@@ -758,7 +885,7 @@
         },
         "options": {}
       },
-      "id": "00da5057-93ed-494e-9822-776f79be618b",
+      "id": "6b832945-87c0-4f6b-b1d8-e75bae3f357e",
       "name": "Alert Configured?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
@@ -777,7 +904,7 @@
           "appendAttribution": false
         }
       },
-      "id": "8b138f52-afed-4455-9375-cbfef5bb4820",
+      "id": "f18b078e-955e-47a8-9f8f-258f11ec3980",
       "name": "Send Review Alert (SMTP)",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
@@ -799,28 +926,28 @@
         "responseMode": "lastNode",
         "options": {}
       },
-      "id": "b0065bfa-d4b6-4734-9c5e-08e7d32f6fc1",
+      "id": "bf90ac26-ab43-45b6-b5bf-296653dd56a4",
       "name": "Webhook: Re-forward",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
         0,
-        480
+        760
       ],
-      "webhookId": "6e6bf26d-30f1-494d-aaee-a289adcd18a6"
+      "webhookId": "3587cc7e-1508-43b9-8ad6-6e02a2f1bfd9"
     },
     {
       "parameters": {
         "assignments": {
           "assignments": [
             {
-              "id": "7ef8abbc-d885-48c1-b134-7f848f6ceeca",
+              "id": "da8a5edf-e420-47fc-a7b5-f8d778eb7001",
               "name": "sender_email",
               "value": "baipor_insurance@hotmail.com",
               "type": "string"
             },
             {
-              "id": "16e93e72-3324-405d-ba2e-491a460d827e",
+              "id": "23dd2a15-2f1a-4aec-98c4-c5afca0ff661",
               "name": "test_forward_email",
               "value": "",
               "type": "string"
@@ -829,13 +956,13 @@
         },
         "options": {}
       },
-      "id": "0c92565a-2dc4-4fd6-b3bf-6a06c25c1477",
+      "id": "94e2857e-c60e-45b2-b87e-69471466d2ea",
       "name": "Re-forward Config",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
         240,
-        480
+        760
       ],
       "executeOnce": true
     },
@@ -856,13 +983,13 @@
         },
         "options": {}
       },
-      "id": "d70172d9-b621-4057-9949-55cb5d847f67",
+      "id": "7d635d7e-d407-4f2a-ab6c-3d06a8cc5864",
       "name": "Read config (Re-forward)",
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [
         480,
-        480
+        760
       ],
       "credentials": {
         "googleApi": {
@@ -890,13 +1017,13 @@
         },
         "options": {}
       },
-      "id": "a1d544f4-0ce2-4e5d-9ce0-633b6b89c674",
+      "id": "bf77035d-db9e-4965-8b2a-c5ee7cbbf1e0",
       "name": "Read Email_Logs (Re-forward)",
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [
         720,
-        480
+        760
       ],
       "credentials": {
         "googleApi": {
@@ -911,13 +1038,13 @@
       "parameters": {
         "jsCode": "// Re-forward จากปุ่มบนเว็บ: เว็บส่ง { action: 're-forward', logId, ... } มาที่ webhook\n// ปลายทางอ่านจาก config (insurance_email) เสมอ ไม่ใช้ค่าที่มากับ request เพื่อกัน webhook ถูกเรียกให้ส่งเมลไปที่อื่น\n// (เว็บเป็นฝ่ายเพิ่มแถว log ของการ re-forward เอง workflow นี้จึงไม่เขียน Email_Logs ซ้ำ)\nconst cfg = $('Re-forward Config').first().json;\nconst esc = s => String(s ?? '').replace(/[&<>\"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[ch]));\nconst body = $('Webhook: Re-forward').first().json.body || {};\n\nif (body.action !== 're-forward' || !body.logId) throw new Error('คำขอไม่ถูกต้อง: ต้องมี action = re-forward และ logId');\n\nconst sys = {};\nfor (const i of $('Read config (Re-forward)').all()) {\n  const r = i.json;\n  if (String(r.Category || '').trim().toUpperCase() === 'SYSTEM') sys[String(r.Key || '').trim()] = String(r.Value || '').trim();\n}\nconst testTo = String(cfg.test_forward_email || '').trim();\nconst forwardTo = testTo || sys.insurance_email;\nif (!forwardTo) throw new Error('ยังไม่ได้ตั้งค่าอีเมลบริษัทประกัน (config: insurance_email)');\n\nconst row = $('Read Email_Logs (Re-forward)').all().map(i => i.json).find(r => String(r.Log_ID || '').trim() === String(body.logId).trim());\nif (!row) throw new Error(`ไม่พบรายการ ${body.logId} ใน Email_Logs`);\n\nconst original = String(row.Original_Body || '').trim();\nconst note = original\n  ? ''\n  : '<p style=\"color:#b45309;\">รายการนี้ไม่มีเนื้อหาต้นฉบับเก็บไว้ในระบบ (ส่งก่อนเริ่มเก็บเนื้อหา) กรุณาดูต้นฉบับจากกล่องจดหมาย</p>';\n\nconst subject = String(row.Subject || '');\nreturn [{\n  json: {\n    forward_to: forwardTo,\n    forward_subject: (testTo ? '[TEST] ' : '') + (subject.toLowerCase().startsWith('fwd:') ? subject : `Fwd: ${subject}`),\n    forward_html: `\n<div style=\"font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #222;\">\n  <div style=\"background-color: #e8f0fe; border-left: 4px solid #1a73e8; padding: 12px 16px; margin-bottom: 16px;\">\n    <strong>[AutoMail] ส่งต่ออีกครั้ง (Re-forward)</strong>${testTo ? ' <span style=\"color:#b45309;\">(โหมดทดสอบ)</span>' : ''}\n  </div>\n  <div style=\"background-color: #f8f9fa; border: 1px solid #ddd; padding: 12px 16px; margin-bottom: 16px; font-size: 13px;\">\n    <p style=\"margin: 2px 0;\"><strong>ลูกค้า:</strong> ${esc(row.Customer_Name)} (${esc(row.Recipient_Email)})</p>\n    <p style=\"margin: 2px 0;\"><strong>รับเมื่อ:</strong> ${esc(row.Sent_Timestamp)}</p>\n    <p style=\"margin: 2px 0;\"><strong>Subject:</strong> ${esc(subject)}</p>\n    <p style=\"margin: 2px 0; color:#64748b;\">ไฟล์แนบเดิมไม่ได้ถูกส่งซ้ำ</p>\n  </div>\n  ${note}\n  <div>${original}</div>\n</div>`\n  }\n}];"
       },
-      "id": "3f0ecae0-5e12-4d46-b4bf-09d26c51e35e",
+      "id": "8ec203b3-49a1-4799-88f6-be18d209e9e8",
       "name": "Build Re-forward",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         960,
-        480
+        760
       ]
     },
     {
@@ -930,13 +1057,13 @@
           "appendAttribution": false
         }
       },
-      "id": "ea8a159c-8639-43cf-9ef7-c2809fcfbc62",
+      "id": "b42a6c0d-2d26-424e-bfe0-ddee14f4a20b",
       "name": "Send Re-forward (SMTP)",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
       "position": [
         1200,
-        480
+        760
       ],
       "credentials": {
         "smtp": {
@@ -1008,6 +1135,46 @@
         [
           {
             "node": "Is Forward?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Attachments": {
+      "main": [
+        [
+          {
+            "node": "Nothing To Save?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nothing To Save?": {
+      "main": [
+        [
+          {
+            "node": "Collect Attachments",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Upload to Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to Drive": {
+      "main": [
+        [
+          {
+            "node": "Collect Attachments",
             "type": "main",
             "index": 0
           }

@@ -24,22 +24,22 @@ global.fetch = async () => ({ ok: webhookStatus < 300, status: webhookStatus, st
 const g = require('./googleSheets');
 
 (async () => {
-  // 1. add with only name+email -> every other cell blank (no random policy, no +180d expiry, no default type)
+  // 1. add with only name+email -> no fabricated values; missing expiry is flagged as ข้อมูลไม่ครบ with a reason
   await g.addMasterData({ name: 'บริษัท ก', email: 'hr@a.co' });
-  assert.deepStrictEqual(tabs.Master_Data[0], ['1', 'บริษัท ก', 'hr@a.co', ...Array(14).fill('')]);
+  assert.deepStrictEqual(tabs.Master_Data[0], ['1', 'บริษัท ก', 'hr@a.co', '', '', '', '', 'ข้อมูลไม่ครบ', 'ไม่มีวันหมดอายุ', ...Array(8).fill('')]);
 
   // 2. duplicate email rejected on add (case-insensitive) and via quick-whitelist
   await assert.rejects(g.addMasterData({ name: 'x', email: 'HR@a.co' }), /มีอยู่แล้ว/);
   await assert.rejects(g.quickWhitelistSender('hr@a.co', ''), /มีอยู่แล้ว/);
 
-  // 3. quick-whitelist writes only email + Valid + note; no guessed name/type
+  // 3. quick-whitelist writes only email + note; no guessed name/type/expiry -> flagged ข้อมูลไม่ครบ
   await g.quickWhitelistSender('hr@b.co', '');
   const b = tabs.Master_Data[1];
-  assert.strictEqual(b[1], ''); assert.strictEqual(b[4], ''); assert.strictEqual(b[6], ''); assert.strictEqual(b[7], 'Valid');
+  assert.strictEqual(b[1], ''); assert.strictEqual(b[4], ''); assert.strictEqual(b[6], ''); assert.strictEqual(b[7], 'ข้อมูลไม่ครบ');
 
   // 4. edit round-trip keeps blank cells blank (no read-side defaults leaking back)
   await g.updateMasterData('1', { notes: 'n' });
-  assert.deepStrictEqual(tabs.Master_Data[0].slice(7, 16), Array(9).fill(''));
+  assert.deepStrictEqual(tabs.Master_Data[0].slice(7, 16), ['ข้อมูลไม่ครบ', 'ไม่มีวันหมดอายุ', ...Array(7).fill('')]);
   await assert.rejects(g.updateMasterData('1', { email: 'hr@b.co' }), /มีอยู่แล้ว/);
   await g.updateMasterData('1', { email: 'HR@A.co' }); // own email, different case -> allowed
 

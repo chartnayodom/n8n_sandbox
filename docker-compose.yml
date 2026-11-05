@@ -1,4 +1,5 @@
 services:
+  # n8n: workflow 01 (ส่งอีเมลแจ้งเตือน R1/R2) และ 02 (อีเมลขาเข้า + webhook re-forward)
   n8n:
     build:
       context: .
@@ -17,3 +18,23 @@ services:
     volumes:
       - ./n8n_data:/home/node/.n8n
       - ./local-files:/files
+
+  # เว็บจัดการระบบ (sheets-app): หน้าเว็บ + API ใน container เดียว
+  # ค่าลับอ่านจาก sheets-app/server/.env (SPREADSHEET_ID, Service Account, IMAP) ไม่มีไฟล์ก็ยังเริ่มได้แต่จะต่อ Google Sheets ไม่ได้
+  # ชีต config: n8n_webhook_url ควรเป็น http://n8n:5678/webhook/re-forward (เรียกกันภายใน network ของ compose)
+  web:
+    build:
+      context: ./sheets-app
+      dockerfile: Dockerfile
+    image: automail-insurance-web:latest
+    container_name: automail_web
+    restart: always
+    ports:
+      - "${WEB_PORT:-5000}:5000"
+    env_file:
+      - path: ./sheets-app/server/.env
+        required: false
+    environment:
+      - PORT=5000
+    depends_on:
+      - n8n

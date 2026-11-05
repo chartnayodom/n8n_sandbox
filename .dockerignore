@@ -1,0 +1,4 @@
+# build context ของ image n8n (Dockerfile ที่โฟลเดอร์ราก) ใช้แค่ workflows/
+# กันไม่ให้ส่ง node_modules, n8n_data, .env และ sheets-app เข้า build context
+*
+!workflows/

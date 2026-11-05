@@ -1,4 +1,6 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
 const cors = require('cors');
 require('dotenv').config();
 
@@ -17,6 +19,10 @@ const {
   addEmailLog,
   reForwardEmail,
   setEmailLogStatus,
+  getAttachment,
+  getCallLogs,
+  addCallLog,
+  INLINE_TYPES,
   quickWhitelistSender,
   getTemplates,
   saveTemplate,
@@ -24,6 +30,7 @@ const {
   getDashboardSummary,
   getActivityLogs
 } = require('./googleSheets');
+const { openMailAttachment } = require('./mailbox');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -190,6 +197,48 @@ app.post('/api/emails/:id/close', async (req, res) => {
   }
 });
 
+// ส่งไฟล์แนบให้เบราว์เซอร์: แสดงในหน้าเฉพาะชนิดที่ปลอดภัย (ไฟล์มาจากผู้ส่งภายนอก) ชนิดอื่นบังคับดาวน์โหลด ?download=1 = ดาวน์โหลด
+function sendAttachment(req, res, file, onDone = () => {}) {
+  const inline = INLINE_TYPES.includes(file.mimeType) && !req.query.download;
+  res.setHeader('Content-Type', file.mimeType);
+  res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(file.name)}`);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // ตัวแสดง PDF ของเบราว์เซอร์ทำงานไม่ได้ภายใต้ CSP sandbox จึงใส่เฉพาะชนิดอื่น
+  if (file.mimeType !== 'application/pdf') res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'");
+  res.on('close', onDone);
+  file.stream.on('error', err => {
+    console.error('Error streaming attachment:', err.message);
+    res.destroy(err);
+  });
+  file.stream.pipe(res);
+}
+
+// ไฟล์แนบที่อยู่ใน Google Drive (ใช้เมื่อเปิดการอัปโหลดใน workflow 02)
+app.get('/api/attachments/:fileId', async (req, res) => {
+  try {
+    sendAttachment(req, res, await getAttachment(req.params.fileId));
+  } catch (err) {
+    console.error('Error fetching attachment:', err.message);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// ไฟล์แนบที่ดึงจากกล่องจดหมายด้วย Message-ID ของรายการใน Email_Logs (ไม่ต้องเก็บสำเนาใน Drive)
+app.get('/api/emails/:id/attachments/:index', async (req, res) => {
+  try {
+    const log = (await getEmailLogs()).find(l => l.id === req.params.id);
+    if (!log) return res.status(404).json({ error: `ไม่พบรายการ ${req.params.id}` });
+    const index = Number(req.params.index);
+    const meta = log.attachments[index];
+    if (!Number.isInteger(index) || !meta) return res.status(404).json({ error: 'ไม่พบไฟล์แนบนี้ในรายการ' });
+    const file = await openMailAttachment(log.messageId, { index, name: meta.name });
+    sendAttachment(req, res, file, file.close);
+  } catch (err) {
+    console.error('Error fetching mailbox attachment:', err.message);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 // Quick Whitelist sender from Needs Review
 app.post('/api/emails/whitelist', async (req, res) => {
   try {
@@ -200,6 +249,27 @@ app.post('/api/emails/whitelist', async (req, res) => {
   } catch (err) {
     console.error('Error quick whitelisting sender:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// 3.5 CALL LOGS (โทรติดตามลูกค้า)
+// ==========================================
+app.get('/api/call-logs', async (req, res) => {
+  try {
+    res.json({ data: await getCallLogs() });
+  } catch (err) {
+    console.error('Error fetching call logs:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/call-logs', async (req, res) => {
+  try {
+    res.status(201).json(await addCallLog(req.body));
+  } catch (err) {
+    console.error('Error adding call log:', err);
+    res.status(400).json({ error: err.message });
   }
 });
 
@@ -291,6 +361,14 @@ app.get('/api/sheets', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// เสิร์ฟหน้าเว็บที่ build แล้ว (Docker image คัดลอก client/dist มาไว้ที่ public/) ตอนพัฒนาใช้ vite dev server แทน
+const STATIC_DIR = process.env.STATIC_DIR || path.join(__dirname, 'public');
+if (fs.existsSync(path.join(STATIC_DIR, 'index.html'))) {
+  app.use(express.static(STATIC_DIR));
+  // หน้าเว็บเป็น SPA: ทุก GET ที่ไม่ใช่ /api ส่ง index.html
+  app.use((req, res, next) => (req.method === 'GET' && !req.path.startsWith('/api') ? res.sendFile(path.join(STATIC_DIR, 'index.html')) : next()));
+}
 
 app.listen(PORT, () => {
   console.log(`🚀 AutoMail Insurance Backend running on http://localhost:${PORT}`);

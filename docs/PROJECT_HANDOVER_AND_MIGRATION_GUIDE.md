@@ -103,30 +103,32 @@ flowchart TD
 
 **หัวคอลัมน์แถวที่ 1 ในชีตจริง (ตรวจแล้วเมื่อ 2026-11-03)** เว็บอ่านด้วยตำแหน่งคอลัมน์ แต่ n8n อ่านด้วยชื่อหัว ห้ามเปลี่ยนชื่อหัวโดยไม่แก้ workflow:
 - `Master_Data` (A:Q): `ID, Customer_Name, Email, Phone, Insurance_Type, Policy_No, Expiry_Date, Data_Status, Review_Reason, Mail_R1_Status, Mail_R1_Date, Mail_R2_Status, Mail_R2_Date, Customer_Status, Next_Followup_Date, Assigned_Agent, Notes`
-  - `Data_Status` ต้องเป็น `Valid` (หรือว่าง) จึงจะส่งเมล `Invalid` / `Needs Review` ถูกข้าม
+  - `Data_Status` ต้องเป็น `Valid` (หรือว่าง) จึงจะส่งเมล `Invalid` / `ข้อมูลไม่ครบ` ถูกข้าม เว็บตั้ง `ข้อมูลไม่ครบ` + `Review_Reason` ให้อัตโนมัติเมื่อบันทึกข้อมูลที่อีเมลไม่ถูกต้องหรือไม่มีวันหมดอายุ (หน้า Master Data มีตัวกรอง "ข้อมูลไม่ครบ")
   - `Mail_R1/R2_Status`: `Sent`/`สำเร็จ`/`Skipped` = ไม่ส่งรอบนั้นอีก, `Pending`/ว่าง = ยังส่งได้
   - `Customer_Status`: `รอดำเนินการ`, `สนใจ / ดำเนินการต่อ`, `นัดหมายติดตาม`, `ยังไม่สนใจ` (หยุดส่ง R2), `ไม่ติดต่อ / ปิดงาน` (หยุดส่งทุกรอบ)
-- `Email_Logs` (A:K): `Log_ID, Sent_Timestamp, Customer_ID, Customer_Name, Recipient_Email, Mail_Round, Subject, Message_ID, Send_Status, Error_Detail, Original_Body` (เว็บอ่านถึงคอลัมน์ J; `Original_Body` คอลัมน์ K เก็บเนื้อหาอีเมลขาเข้าไว้ให้ Re-forward)
+- `Email_Logs` (A:L): `Log_ID, Sent_Timestamp, Customer_ID, Customer_Name, Recipient_Email, Mail_Round, Subject, Message_ID, Send_Status, Error_Detail, Original_Body, Attachments` (เว็บอ่าน A:J และ L; `Original_Body` คอลัมน์ K เก็บเนื้อหาอีเมลขาเข้าไว้ให้ Re-forward; `Attachments` คอลัมน์ L เป็น JSON `[{index, name, mimeType, size}]` รายการไฟล์แนบในอีเมล เว็บเปิดไฟล์จากกล่องจดหมายด้วย Message-ID ตามลำดับนี้ (รายการที่มี `id` = ไฟล์ใน Google Drive กรณีเปิดใช้การอัปโหลด))
   - workflow 01 (ส่งออก) เพิ่มแถว `Send_Status` = `Sent` / `Failed`
   - workflow 02 (ขาเข้า) เพิ่มแถว `Forwarded` / `Failed` / `Needs Review` โดย `Recipient_Email` = อีเมลผู้ส่งของอีเมลขาเข้า
-- `Call_Logs` (A:J): `Call_ID, Call_Timestamp, Customer_ID, Customer_Name, Phone, Agent_Name, Call_Result, Customer_Interest, Next_Appointment, Call_Notes` (เว็บยังไม่ได้ใช้)
+- `Call_Logs` (A:J): `Call_ID, Call_Timestamp, Customer_ID, Customer_Name, Phone, Agent_Name, Call_Result, Customer_Interest, Next_Appointment, Call_Notes` บันทึกจากหน้า "ติดตามลูกค้า" ของเว็บ (`POST /api/call-logs`): `Customer_Interest` = สถานะลูกค้าหลังโทร, `Next_Appointment` = วันนัด yyyy-mm-dd และอัปเดต `Customer_Status` / `Next_Followup_Date` / `Assigned_Agent` ใน `Master_Data` (เขียนเฉพาะคอลัมน์ N:P) คิวโทร = ลูกค้าที่ได้รับอีเมล R1/R2 แล้ว และยังไม่ "ไม่ติดต่อ / ปิดงาน"
 - `Templates` (A:G): `Template_ID, Template_Name, Subject, Recipient_Type, Status, Description, HTML_Content` workflow เลือก template รอบ R1/R2 จาก `Template_Name` = `R1 - 6 เดือน` / `R2 - 3 เดือน` (ตั้งชื่อใน `Global Config`) ซึ่งเพิ่มไว้แล้วเป็น `TPL-05` / `TPL-06` ตัวแปรที่ใช้ได้: `{{customerName}} {{policyNo}} {{policyExpiry}} {{insuranceType}} {{roundLabel}} {{monthsAhead}} {{driveLinks}}` (`{{customerName}}` ใช้ชื่อตามชีตตรงๆ ไม่ต้องใส่คำว่า "คุณ" นำหน้า)
 
 **โหมดทดสอบการส่งอีเมล:** ตั้ง `test_recipient_email` ใน node `Global Config` เป็นอีเมลที่ต้องการ ทุกฉบับจะถูกส่งไปอีเมลนั้นแทนอีเมลลูกค้า และ subject จะขึ้นต้นด้วย `[TEST]` (log ใน `Email_Logs` บันทึกอีเมลที่ส่งจริง) ปล่อยว่าง = ส่งถึงลูกค้าจริง
 
 ### 3.4 เวิร์กโฟลว์ n8n ที่บันทึกไว้ในโฟลเดอร์ `workflows/`
-- `c7AnideudYIbfvmK.json` (ชื่อใน n8n: `01 - AutoMail Outbound R1/R2 (v2 Master_Data)` ไฟล์นี้ไม่มี `id` เมื่อ import จะสร้างเป็น workflow ใหม่ ไม่ทับของเดิม และ `active: false`):
+- `c7AnideudYIbfvmK.json` (ชื่อใน n8n: `01 - AutoMail Outbound R1/R2 (v2 Master_Data)` id คงที่ `AutoMailOutbound` import ซ้ำจะอัปเดต workflow เดิม ไม่ชนกับ workflow เวอร์ชันเก่า และ `active: false`):
   - **[อัปเดตล่าสุด]:** เพิ่มระบบตรวจสอบรอบการส่ง Auto Email ล่วงหน้า 6 เดือน (R1: 91 - 180 วัน) และ 3 เดือน (R2: 1 - 90 วัน) อัตโนมัติ
   - ตรวจสอบ `Mail_R1_Status` และ `Mail_R2_Status` ป้องกันการส่งซ้ำ หากรอบใดเคยส่งแล้ว (`Sent`) จะข้ามทันที
   - สร้างหัวข้อ (Subject) และเนื้อหาอีเมลแยกตามรอบที่ส่ง
   - อัปเดต `Mail_R1_Status` / `Mail_R1_Date` หรือ `Mail_R2_Status` / `Mail_R2_Date` กลับลงชีต `Master_Data` ตามรอบจริง
   - ปรับปรุงรายงานสรุปผล (Summary Report) ให้แสดงสถิติการส่งสำเร็จแยกตามรอบ 6M และ 3M
-- `02-AutoMail-Inbound-Router.json` (ชื่อใน n8n: `02 - AutoMail Inbound Router (Master_Data → Insurance / Needs Review)` ไม่มี `id` และ `active: false`) แทนที่ `a14U6Ep5Yxt4eZH1.json` และ workflow 02 เวอร์ชันเก่าทั้งหมด:
+- `02-AutoMail-Inbound-Router.json` (ชื่อใน n8n: `02 - AutoMail Inbound Router (Master_Data → Insurance / Needs Review)` id คงที่ `AutoMailInbound2`, `active: false`) แทนที่ `a14U6Ep5Yxt4eZH1.json` และ workflow 02 เวอร์ชันเก่าทั้งหมด:
   - **Flow A (IMAP Trigger):** อ่านอีเมลใหม่ (UNSEEN, ทำเครื่องหมายอ่านแล้ว) → เทียบอีเมลผู้ส่งกับ `Master_Data`
-    - **ผู้ส่งอยู่ใน `Master_Data`** → ส่งต่อไป `insurance_email` (ชีต `config`) พร้อมไฟล์แนบ และตั้ง Reply-To เป็นผู้ส่งเดิม → บันทึก `Email_Logs` สถานะ `Forwarded` (ส่งไม่สำเร็จ = `Failed`)
-      - ถ้า `auto_forward` ในชีต `config` เป็น FALSE → ไม่ส่ง บันทึกสถานะ `Pending` รอเจ้าหน้าที่กด "ส่งต่ออีกครั้ง"
-      - ถ้ายังไม่ได้ตั้ง `insurance_email` → บันทึกสถานะ `Failed` พร้อมเหตุผล
-    - **ผู้ส่งไม่อยู่ใน `Master_Data` = Needs Review** (นิยามเดียวของ Needs Review) → ไม่ส่งต่อ บันทึกสถานะ `Needs Review` ให้เจ้าหน้าที่ตรวจสอบก่อน ไม่กรองด้วยหัวข้ออีเมล (เมลที่ไม่ต้องการให้เข้าหน้านี้ ให้ใส่ผู้ส่งไว้ใน `ignore_senders` ของ `Global Config`)
+    - **ส่งต่อบริษัทประกัน** เมื่อผู้ส่งอยู่ใน `Master_Data` **และ** (เป็นการตอบกลับอีเมลที่ระบบส่ง ตรวจจาก In-Reply-To/References เทียบ `Message_ID` ใน `Email_Logs` **หรือ** หัวข้อมี prefix ตาม `subject_prefixes` ในชีต `config`) → ส่งไป `insurance_email` พร้อมไฟล์แนบ ตั้ง Reply-To เป็นผู้ส่งเดิม → บันทึก `Forwarded` (ส่งไม่สำเร็จ = `Failed`)
+      - ถ้า `auto_forward` เป็น FALSE → บันทึก `Pending` รอเจ้าหน้าที่กด "ส่งต่ออีกครั้ง" / ถ้ายังไม่ได้ตั้ง `insurance_email` → บันทึก `Failed`
+    - **นอกนั้นทั้งหมด = Needs Review**: ผู้ส่งไม่อยู่ใน `Master_Data` (แม้เป็นการตอบกลับ) หรืออยู่แต่ไม่ใช่การตอบกลับและหัวข้อไม่มี prefix → บันทึก `Needs Review` พร้อมเหตุผลใน `Error_Detail` เจ้าหน้าที่จัดการในหน้า Needs Review: ส่งต่ออีกครั้ง (→ `Manually Forwarded`) / เพิ่มผู้ส่งเข้า Master Data / ปิดรายการ (→ `Closed`)
+    - **ไฟล์แนบ**: ไม่เก็บสำเนา workflow บันทึกรายการไฟล์ (ลำดับ ชื่อ ชนิด ขนาด) ในคอลัมน์ `Attachments` เมื่อเจ้าหน้าที่กด "ดู" เว็บ server ต่อ IMAP เข้ากล่องจดหมาย ค้นอีเมลด้วย `Message-ID` (ในโฟลเดอร์ All Mail ของ Gmail) แล้วดึงเฉพาะไฟล์นั้น (`GET /api/emails/:logId/attachments/:index`) แสดงในหน้าได้: PNG/JPEG/GIF/WebP/PDF/ข้อความ ชนิดอื่นดาวน์โหลด
+      - ต้องตั้ง `IMAP_USER` / `IMAP_PASSWORD` (App Password) ใน `sheets-app/server/.env` และอีเมลต้องยังอยู่ในกล่องจดหมาย (ลบถาวรแล้วจะเปิดไม่ได้)
+      - ชุด node อัปโหลด Google Drive (`Split Attachments` → `Upload to Drive` → `Collect Attachments`) ยังอยู่ใน workflow แต่**ไม่ได้เชื่อมต่อ** เป็นทางสำรอง ถ้าจะใช้ต้องมี Shared Drive (Workspace) หรือ credential Google Drive OAuth2 เพราะ Service Account อัปโหลดเข้า My Drive ไม่ได้
     - ข้ามอีเมลที่ผู้ส่งอยู่ใน `ignore_senders` / เป็นอีเมลบริษัทประกัน และอีเมลที่ Message-ID อยู่ใน `Email_Logs` แล้ว
     - ถ้าตั้ง `review_alert_email` ใน `Global Config` จะส่งอีเมลแจ้งเตือนเมื่อมีรายการ Needs Review
   - **Flow B (Webhook `POST /webhook/re-forward`):** รับคำสั่ง Re-forward จากปุ่มบนเว็บ ส่งเนื้อหาที่เก็บใน `Original_Body` ไปยัง `insurance_email` จาก `config` เสมอ (ไม่ใช้ปลายทางที่มากับ request) เว็บเป็นฝ่ายเพิ่มแถว log เอง ไฟล์แนบเดิมไม่ถูกส่งซ้ำ

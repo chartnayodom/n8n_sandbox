@@ -239,6 +239,36 @@ async function deleteConfigItem(category, key) {
 // 2. MASTER DATA (Customers & Whitelist)
 // ==========================================
 
+// ---- ตรวจความถูกต้องของข้อมูลลูกค้า (Flow ขั้นตอน 2) ----
+// อีเมลรูปแบบถูกต้อง + มีวันหมดอายุที่อ่านได้ จึงจะส่งอีเมลแจ้งเตือนได้ ไม่ผ่าน = 'ข้อมูลไม่ครบ' พร้อมเหตุผลใน Review_Reason
+const DATA_INCOMPLETE = 'ข้อมูลไม่ครบ';
+
+function isReadableDate(value) {
+  const s = String(value || '').trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  let d, mo;
+  if (m) { mo = +m[2]; d = +m[3]; }
+  else if ((m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})/))) {
+    d = +m[1]; mo = +m[2];
+    if (mo > 12 && d <= 12) [d, mo] = [mo, d];
+  } else return false;
+  return mo >= 1 && mo <= 12 && d >= 1 && d <= 31;
+}
+
+function dataIssues({ email, expiry }) {
+  const issues = [];
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim())) issues.push('อีเมลไม่ถูกต้อง');
+  if (!String(expiry || '').trim()) issues.push('ไม่มีวันหมดอายุ');
+  else if (!isReadableDate(expiry)) issues.push('รูปแบบวันหมดอายุไม่ถูกต้อง');
+  return issues;
+}
+
+// คืนค่า [Data_Status, Review_Reason]: ข้อมูลไม่ผ่าน = ข้อมูลไม่ครบ / ผ่าน = คง Invalid ที่เจ้าหน้าที่ตั้ง (ห้ามส่ง) ไม่เช่นนั้น Valid
+function resolveDataStatus(chosen, issues) {
+  if (issues.length) return [DATA_INCOMPLETE, issues.join(', ')];
+  return [chosen === 'Invalid' ? 'Invalid' : 'Valid', ''];
+}
+
 async function getMasterData() {
   const sheets = getSheetsClient();
   if (!sheets) throw new Error('Google Sheets credentials not configured');
@@ -267,6 +297,7 @@ async function getMasterData() {
     nextFollowup: r[14] || '',
     assignedAgent: r[15] || '',
     notes: r[16] || '',
+    dataIssues: dataIssues({ email: r[2], expiry: r[6] }), // ตรวจตอนอ่านด้วย เผื่อมีการแก้ในชีตโดยตรง
     _rowIndex: idx + 2
   }));
 }
@@ -279,6 +310,7 @@ async function addMasterData(item) {
   const currentRows = await getMasterData();
   assertEmailUnique(currentRows, item.email);
   const nextId = String(currentRows.length + 1);
+  const [dataStatus, reviewReason] = resolveDataStatus(item.dataStatus, dataIssues(item));
 
   // เขียนเฉพาะค่าที่ผู้ใช้กรอก ช่องที่ไม่ได้กรอกเป็นค่าว่าง (ไม่เติมค่าแทน เพราะ n8n ใช้ชีตนี้ส่งอีเมลจริง)
   const newRow = [
@@ -289,8 +321,8 @@ async function addMasterData(item) {
     item.type || '',
     item.policy || '',
     item.expiry || '',
-    item.dataStatus || '',
-    item.reviewReason || '',
+    dataStatus,
+    reviewReason,
     item.mailR1Status || '',
     item.mailR1Date || '',
     item.mailR2Status || '',
@@ -334,17 +366,23 @@ async function updateMasterData(id, item) {
   // ตรวจเฉพาะเมื่อเปลี่ยนค่า (ค่าเดิมในชีตที่แก้มือจะไม่ทำให้บันทึกฟอร์มล้มเหลว)
   if (item.customerStatus && item.customerStatus !== found.customerStatus) assertCustomerStatus(item.customerStatus);
 
+  const email = item.email !== undefined ? item.email : found.email;
+  const [dataStatus, reviewReason] = resolveDataStatus(
+    item.dataStatus !== undefined ? item.dataStatus : found.dataStatus,
+    dataIssues({ email, expiry: found.expiry })
+  );
+
   // วันหมดอายุของลูกค้าเดิมแก้ผ่านปุ่ม "ต่ออายุ" เท่านั้น (renewMasterData) เพื่อให้ reset สถานะ R1/R2 เสมอ
   const updatedRow = [
     found.id,
     item.name !== undefined ? item.name : found.name,
-    item.email !== undefined ? item.email : found.email,
+    email,
     item.phone !== undefined ? item.phone : found.phone,
     item.type !== undefined ? item.type : found.type,
     item.policy !== undefined ? item.policy : found.policy,
     found.expiry,
-    item.dataStatus !== undefined ? item.dataStatus : found.dataStatus,
-    found.reviewReason,
+    dataStatus,
+    reviewReason,
     found.mailR1Status,
     found.mailR1Date,
     found.mailR2Status,
@@ -392,12 +430,13 @@ async function renewMasterData(id, expiry) {
   if (!found) throw new Error(`Customer with ID ${id} not found`);
 
   const row = found._rowIndex;
+  const [dataStatus, reviewReason] = resolveDataStatus(found.dataStatus, dataIssues({ email: found.email, expiry }));
   await sheets.spreadsheets.values.batchUpdate({
     spreadsheetId: SPREADSHEET_ID(),
     requestBody: {
       valueInputOption: 'USER_ENTERED',
       data: [
-        { range: `Master_Data!G${row}`, values: [[expiry]] },
+        { range: `Master_Data!G${row}:I${row}`, values: [[expiry, dataStatus, reviewReason]] },
         { range: `Master_Data!J${row}:M${row}`, values: [['Pending', '', 'Pending', '']] },
         { range: `Master_Data!N${row}:O${row}`, values: [['รอดำเนินการ', '']] }
       ]
@@ -409,6 +448,73 @@ async function renewMasterData(id, expiry) {
 }
 
 // ==========================================
+// 3.5 CALL LOGS (โทรติดตามลูกค้า: Flow ขั้นตอน 4-5)
+// ==========================================
+const CALL_RESULTS = ['ติดต่อได้', 'ไม่รับสาย', 'เบอร์ไม่ถูกต้อง'];
+
+async function getCallLogs() {
+  const sheets = getSheetsClient();
+  if (!sheets) throw new Error('Google Sheets credentials not configured');
+
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID(),
+    range: 'Call_Logs!A2:J'
+  });
+
+  return (res.data.values || [])
+    .map(r => ({
+      id: r[0] || '',
+      timestamp: r[1] || '',
+      customerId: r[2] || '',
+      customerName: r[3] || '',
+      phone: r[4] || '',
+      agentName: r[5] || '',
+      callResult: r[6] || '',
+      customerInterest: r[7] || '',
+      nextAppointment: r[8] || '',
+      notes: r[9] || ''
+    }))
+    .filter(c => c.id || c.customerId);
+}
+
+// บันทึกการโทร 1 ครั้งลง Call_Logs แล้วอัปเดตลูกค้าใน Master_Data เฉพาะเซลล์ N:P
+// (Customer_Status, Next_Followup_Date, Assigned_Agent) ไม่เขียนทับทั้งแถว เพื่อไม่ชนกับที่ n8n อัปเดตสถานะส่งเมล
+async function addCallLog(item) {
+  const sheets = getSheetsClient();
+  if (!sheets) throw new Error('Google Sheets credentials not configured');
+
+  if (!CALL_RESULTS.includes(item.callResult)) throw new Error('กรุณาเลือกผลการโทร');
+  if (item.customerStatus) assertCustomerStatus(item.customerStatus);
+  const next = String(item.nextFollowup || '').trim();
+  if (next && (!/^\d{4}-\d{2}-\d{2}$/.test(next) || isNaN(new Date(next).getTime()))) throw new Error('วันนัดครั้งถัดไปไม่ถูกต้อง');
+
+  const found = (await getMasterData()).find(r => r.id === String(item.customerId));
+  if (!found) throw new Error(`Customer with ID ${item.customerId} not found`);
+
+  const agent = String(item.assignedAgent || '').trim();
+  const status = item.customerStatus || found.customerStatus;
+  const timestamp = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Bangkok' }); // yyyy-mm-dd HH:mm:ss
+  const log = [`CALL-${Date.now()}`, timestamp, found.id, found.name, found.phone, agent, item.callResult, status, next, String(item.notes || '').trim()];
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SPREADSHEET_ID(),
+    range: 'Call_Logs!A:J',
+    valueInputOption: 'RAW',
+    insertDataOption: 'INSERT_ROWS',
+    requestBody: { values: [log] }
+  });
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SPREADSHEET_ID(),
+    range: `Master_Data!N${found._rowIndex}:P${found._rowIndex}`,
+    valueInputOption: 'RAW',
+    requestBody: { values: [[status, next, agent || found.assignedAgent]] }
+  });
+
+  logActivity('CALL_LOG_ADD', `บันทึกการโทร ${found.name || found.email} (${item.callResult}) สถานะ ${status || '-'}`, agent || 'Admin');
+  return { success: true, log };
+}
+
+// ==========================================
 // 3. EMAIL LOGS & RE-FORWARD
 // ==========================================
 
@@ -416,12 +522,14 @@ async function getEmailLogs() {
   const sheets = getSheetsClient();
   if (!sheets) throw new Error('Google Sheets credentials not configured');
 
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID(),
-    range: 'Email_Logs!A2:J'
-  });
+  // A:J = ข้อมูลหลัก, L = Attachments (JSON จาก workflow 02) ข้ามคอลัมน์ K (Original_Body) ที่ยาวมาก
+  const [res, attRes] = await Promise.all([
+    sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID(), range: 'Email_Logs!A2:J' }),
+    sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID(), range: 'Email_Logs!L2:L' })
+  ]);
 
   const rows = res.data.values || [];
+  const attRows = attRes.data.values || [];
   return rows.map((r, idx) => ({
     id: r[0] || '',
     timestamp: r[1] || '',
@@ -433,8 +541,40 @@ async function getEmailLogs() {
     messageId: r[7] || '',
     status: (r[8] || '').trim(),
     errorDetail: r[9] || '',
+    attachments: parseAttachments(attRows[idx]?.[0]),
     _rowIndex: idx + 2
   }));
+}
+
+function parseAttachments(text) {
+  try {
+    const list = JSON.parse(text || '[]');
+    // { id } = ไฟล์ใน Google Drive, ไม่มี id = ไฟล์แนบในอีเมล ดึงจากกล่องจดหมายด้วย Message-ID ตามลำดับ
+    return Array.isArray(list) ? list.filter(a => a && (a.id || a.name)) : [];
+  } catch {
+    return [];
+  }
+}
+
+// ชนิดไฟล์ที่ให้เปิดแสดงในหน้าเว็บได้ (ไฟล์มาจากผู้ส่งภายนอก จึงไม่เปิด html/svg/ไฟล์อื่นแบบ inline เพื่อกันสคริปต์)
+const INLINE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf', 'text/plain'];
+
+// ดึงไฟล์แนบจาก Google Drive ด้วย Service Account เฉพาะไฟล์ที่ถูกบันทึกไว้ใน Email_Logs เท่านั้น
+async function getAttachment(fileId) {
+  const drive = getDriveClient();
+  if (!drive) throw new Error('Google Drive credentials not configured');
+
+  const logs = await getEmailLogs();
+  if (!logs.some(l => l.attachments.some(a => a.id === fileId))) {
+    const err = new Error('ไม่พบไฟล์แนบนี้ใน Email_Logs');
+    err.status = 404;
+    throw err;
+  }
+
+  const meta = await drive.files.get({ fileId, fields: 'name,mimeType,size', supportsAllDrives: true });
+  const media = await drive.files.get({ fileId, alt: 'media', supportsAllDrives: true }, { responseType: 'stream' });
+  const mimeType = meta.data.mimeType || 'application/octet-stream';
+  return { name: meta.data.name || 'file', mimeType, size: meta.data.size, inline: INLINE_TYPES.includes(mimeType), stream: media.data };
 }
 
 async function addEmailLog(item) {
@@ -537,8 +677,7 @@ async function quickWhitelistSender(senderEmail, customerName) {
   await addMasterData({
     name: customerName || '',
     email: senderEmail,
-    dataStatus: 'Valid',
-    notes: 'อนุมัติผ่านหน้า Needs Review'
+    notes: 'อนุมัติผ่านหน้า Needs Review' // ยังไม่มีวันหมดอายุ ระบบจะตั้งเป็น ข้อมูลไม่ครบ ให้เจ้าหน้าที่ติดต่อขอข้อมูลเพิ่ม
   });
 
   logActivity('WHITELIST_APPROVE', `อนุมัติ Whitelist อีเมล ${senderEmail} เข้าสู่ Master Data`, 'Admin');
@@ -651,11 +790,10 @@ async function getDashboardSummary() {
   ]);
 
   const total = logs.length;
-  // Needs Review = สถานะ Needs Review และผู้ส่งยังไม่อยู่ใน Master Data (เพิ่มเข้า Master Data แล้วรายการจะหายไปเอง)
+  // Needs Review = รายการสถานะ Needs Review ที่เจ้าหน้าที่ยังไม่ได้ส่งต่อ (Manually Forwarded) หรือปิด (Closed)
   // รอดำเนินการ = Pending + Failed (ค้างส่ง / รอ Retry)
-  const masterEmails = new Set(master.map(m => (m.email || '').trim().toLowerCase()));
   const forwarded = logs.filter(l => ['Sent', 'Forwarded', 'Manually Forwarded'].includes(l.status)).length;
-  const review = logs.filter(l => l.status === 'Needs Review' && !masterEmails.has((l.recipientEmail || '').trim().toLowerCase())).length;
+  const review = logs.filter(l => l.status === 'Needs Review').length;
   const pending = logs.filter(l => l.status === 'Pending' || l.status === 'Failed').length;
 
   return {
@@ -680,6 +818,10 @@ module.exports = {
   addEmailLog,
   reForwardEmail,
   setEmailLogStatus,
+  getAttachment,
+  getCallLogs,
+  addCallLog,
+  INLINE_TYPES,
   quickWhitelistSender,
   getTemplates,
   saveTemplate,

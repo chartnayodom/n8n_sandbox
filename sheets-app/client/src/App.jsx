@@ -3,6 +3,8 @@ import React, { useState, useEffect } from 'react';
 const INSURANCE_TYPES = ['ประกันสุขภาพกลุ่ม', 'ประกันชีวิตกลุ่ม', 'ประกันอุบัติเหตุกลุ่ม'];
 // ต้องตรงกับ CUSTOMER_STATUSES ฝั่ง server และค่าในชีต ('ยังไม่สนใจ' หยุด R2, 'ไม่ติดต่อ / ปิดงาน' หยุดทุกรอบ)
 const CUSTOMER_STATUSES = ['รอดำเนินการ', 'สนใจ / ดำเนินการต่อ', 'นัดหมายติดตาม', 'ยังไม่สนใจ', 'ไม่ติดต่อ / ปิดงาน'];
+const PREVIEW_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+const PREVIEW_FRAME_TYPES = ['application/pdf', 'text/plain'];
 const CUSTOMER_STATUS_HINTS = { 'ยังไม่สนใจ': ' (หยุดส่งอีเมลรอบ 3 เดือน)', 'ไม่ติดต่อ / ปิดงาน': ' (หยุดส่งอีเมลทุกรอบ)' };
 
 export default function App() {
@@ -54,10 +56,23 @@ export default function App() {
   const [editingCustomer, setEditingCustomer] = useState(null);
   const emptyCustomerForm = { name: '', email: '', phone: '', type: '', policy: '', dataStatus: 'Valid', customerStatus: '', notes: '', expiry: '' };
   const [customerForm, setCustomerForm] = useState(emptyCustomerForm);
+  const [masterFilter, setMasterFilter] = useState('ALL'); // ALL | INCOMPLETE | INVALID
 
   // Renew Modal (ต่ออายุกรมธรรม์: เจ้าหน้าที่กรอกวันหมดอายุใหม่เอง)
   const [renewTarget, setRenewTarget] = useState(null);
   const [renewExpiry, setRenewExpiry] = useState('');
+
+  // ตัวอย่างไฟล์แนบ (ดึงจาก Google Drive ผ่าน /api/attachments โดยไม่ต้องเปิดหน้า Google Drive)
+  const [previewFile, setPreviewFile] = useState(null);
+  const attachmentUrl = (log, file, index) => (file.id
+    ? `/api/attachments/${encodeURIComponent(file.id)}`
+    : `/api/emails/${encodeURIComponent(log.id)}/attachments/${index}`);
+
+  // ติดตามลูกค้า (คิวโทร + บันทึกการโทร)
+  const [callLogs, setCallLogs] = useState([]);
+  const [followFilter, setFollowFilter] = useState('ALL'); // ALL | TODAY | OVERDUE | NEVER | R1 | R2
+  const [followSelectedId, setFollowSelectedId] = useState(null);
+  const [callForm, setCallForm] = useState({ callResult: 'ติดต่อได้', customerStatus: 'รอดำเนินการ', nextFollowup: '', assignedAgent: '', notes: '' });
 
   // Template Modal (Add & Edit)
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
@@ -103,15 +118,16 @@ export default function App() {
   const fetchAllData = async () => {
     try {
       setRefreshing(true);
-      const [dashRes, masterRes, emailRes, tplRes, confRes, logRes] = await Promise.all([
+      const [dashRes, masterRes, emailRes, tplRes, confRes, logRes, callRes] = await Promise.all([
         fetch('/api/dashboard').catch(() => null),
         fetch('/api/master-data').catch(() => null),
         fetch('/api/emails').catch(() => null),
         fetch('/api/templates').catch(() => null),
         fetch('/api/config').catch(() => null),
-        fetch('/api/activity-logs').catch(() => null)
+        fetch('/api/activity-logs').catch(() => null),
+        fetch('/api/call-logs').catch(() => null)
       ]);
-      setLoadError([dashRes, masterRes, emailRes, tplRes, confRes, logRes].some(r => !r || !r.ok));
+      setLoadError([dashRes, masterRes, emailRes, tplRes, confRes, logRes, callRes].some(r => !r || !r.ok));
 
       if (dashRes && dashRes.ok) {
         const d = await dashRes.json();
@@ -136,6 +152,10 @@ export default function App() {
       if (logRes && logRes.ok) {
         const l = await logRes.json();
         if (l.data) setActivityLogs(l.data);
+      }
+      if (callRes && callRes.ok) {
+        const c = await callRes.json();
+        if (c.data) setCallLogs(c.data);
       }
     } catch (err) {
       console.error('Failed to load data:', err);
@@ -236,7 +256,7 @@ export default function App() {
       });
       const data = await res.json();
       if (data.success) {
-        showToast(`อนุมัติ Whitelist อีเมล ${senderEmail} สำเร็จ!`);
+        showToast(`เพิ่ม ${senderEmail} เข้า Master Data แล้ว อีเมลครั้งถัดไปจะส่งต่ออัตโนมัติ (ฉบับนี้ยังต้องกดส่งต่อหรือปิดรายการ)`);
         fetchAllData();
       } else {
         showToast(data.error || 'อนุมัติไม่สำเร็จ', 'error');
@@ -324,7 +344,7 @@ export default function App() {
   // Config Management (System, Drive links, Users)
   const handleSaveSystemConfig = async () => {
     try {
-      await Promise.all([
+      const results = await Promise.all([
         fetch('/api/config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -344,8 +364,19 @@ export default function App() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ category: 'SYSTEM', key: 'n8n_webhook_url', value: config.system.n8n_webhook_url, description: 'n8n Webhook URL' })
+        }),
+        fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ category: 'SYSTEM', key: 'subject_prefixes', value: config.system.subject_prefixes || '', description: 'prefix หัวข้ออีเมลที่ส่งต่อบริษัทประกันได้ (คั่นด้วย ,)' })
+        }),
+        fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ category: 'SYSTEM', key: 'attachment_folder_id', value: config.system.attachment_folder_id || '', description: 'ID โฟลเดอร์ Google Drive เก็บไฟล์แนบอีเมลขาเข้า' })
         })
       ]);
+      if (results.some(r => !r.ok)) throw new Error('บางรายการบันทึกไม่สำเร็จ');
       showToast('บันทึกการตั้งค่าระบบลงชีต config เรียบร้อย');
       fetchAllData();
     } catch (err) {
@@ -428,10 +459,122 @@ export default function App() {
     }
   };
 
+  // ==========================================
+  // ติดตามลูกค้า (Flow ขั้นตอน 4-5): คิวโทรหลังส่งอีเมล R1/R2 + บันทึกผลการโทร
+  // ==========================================
+  const [todayIso] = useState(() => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' })); // วันนี้ (เวลาไทย) ณ ตอนเปิดหน้า
+  // วันที่ในชีตอาจเป็น yyyy-mm-dd หรือ dd/mm/yyyy (พ.ศ. ได้) แปลงเป็น yyyy-mm-dd เพื่อเทียบกับวันนี้
+  const toIsoDate = value => {
+    const s = String(value || '').trim();
+    let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+    m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})/);
+    if (!m) return '';
+    const year = +m[3] > 2400 ? +m[3] - 543 : +m[3];
+    return `${year}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  };
+  const isMailSent = status => ['Sent', 'สำเร็จ'].includes((status || '').trim());
+  const DUE_ORDER = { OVERDUE: 0, TODAY: 1, NEVER: 2, LATER: 3, NONE: 4 };
+  // คิวโทร = ลูกค้าที่ได้รับอีเมล R1/R2 แล้ว และยังไม่ปิดงาน เรียง เลยกำหนด → วันนี้ → ยังไม่เคยโทร → นัดล่วงหน้า
+  const followQueue = masterData
+    .filter(m => (isMailSent(m.mailR1Status) || isMailSent(m.mailR2Status)) && !(m.customerStatus || '').includes('ปิดงาน'))
+    .map(m => {
+      const next = toIsoDate(m.nextFollowup);
+      const calls = callLogs.filter(c => c.customerId === m.id);
+      const due = !next ? (calls.length ? 'NONE' : 'NEVER') : next < todayIso ? 'OVERDUE' : next === todayIso ? 'TODAY' : 'LATER';
+      const round = isMailSent(m.mailR2Status) ? 'R2' : 'R1';
+      const mailDate = round === 'R2' ? m.mailR2Date : m.mailR1Date;
+      return { ...m, next, due, calls, round, lastMail: `${round} ส่งแล้ว${mailDate ? ` · ${mailDate}` : ''}` };
+    })
+    .sort((a, b) => DUE_ORDER[a.due] - DUE_ORDER[b.due] || (a.next || '').localeCompare(b.next || ''));
+  const followCounts = {
+    ALL: followQueue.length,
+    TODAY: followQueue.filter(f => f.due === 'TODAY').length,
+    OVERDUE: followQueue.filter(f => f.due === 'OVERDUE').length,
+    NEVER: followQueue.filter(f => f.due === 'NEVER').length
+  };
+  const followRows = followQueue.filter(f => {
+    const q = searchQuery.toLowerCase();
+    if (q && !`${f.name} ${f.phone} ${f.email}`.toLowerCase().includes(q)) return false;
+    if (followFilter === 'R1' || followFilter === 'R2') return f.round === followFilter;
+    return followFilter === 'ALL' || f.due === followFilter;
+  });
+  const followSelected = followQueue.find(f => f.id === followSelectedId) || null;
+  // ประวัติลูกค้า = การโทร + อีเมลที่เกี่ยวกับลูกค้ารายนี้ เรียงล่าสุดก่อน
+  const followHistory = followSelected
+    ? [
+        ...followSelected.calls.map(c => ({
+          key: c.id,
+          time: c.timestamp,
+          kind: 'call',
+          title: `โทร: ${c.callResult || '-'}${c.customerInterest ? ` → ${c.customerInterest}` : ''}`,
+          detail: [c.agentName, c.nextAppointment ? `นัด ${c.nextAppointment}` : '', c.notes].filter(Boolean).join(' · ')
+        })),
+        ...emails
+          .filter(e => e.customerId === followSelected.id || (e.recipientEmail || '').toLowerCase() === (followSelected.email || '').toLowerCase())
+          .map(e => ({ key: e.id, time: e.timestamp, kind: 'mail', title: `อีเมล: ${e.mailRound || e.subject} (${e.status || '-'})`, detail: e.subject }))
+      ].sort((a, b) => String(b.time).localeCompare(String(a.time)))
+    : [];
+  const customerStatusBadge = status => {
+    const s = status || '';
+    if (s.includes('ปิดงาน')) return 'bg-red-100 text-red-800';
+    if (s.includes('ไม่สนใจ')) return 'bg-orange-100 text-orange-800';
+    if (s.includes('นัดหมาย')) return 'bg-blue-100 text-blue-800';
+    if (s.includes('สนใจ')) return 'bg-emerald-100 text-emerald-800';
+    return 'bg-slate-100 text-slate-700';
+  };
+  const dueLabel = f =>
+    f.due === 'OVERDUE' ? { text: `เลยกำหนด ${f.next}`, cls: 'bg-red-100 text-red-800' }
+    : f.due === 'TODAY' ? { text: 'วันนี้', cls: 'bg-amber-100 text-amber-800' }
+    : f.due === 'LATER' ? { text: f.next, cls: 'bg-slate-100 text-slate-700' }
+    : f.due === 'NEVER' ? { text: 'ยังไม่เคยโทร', cls: 'bg-blue-100 text-blue-800' }
+    : { text: '-', cls: 'text-slate-400' };
+
+  const openCallForm = f => {
+    setFollowSelectedId(f.id);
+    setCallForm({
+      callResult: 'ติดต่อได้',
+      customerStatus: f.customerStatus || 'รอดำเนินการ',
+      nextFollowup: '',
+      assignedAgent: f.assignedAgent || currentUser?.name || '',
+      notes: ''
+    });
+  };
+
+  const handleSaveCall = async (e) => {
+    e.preventDefault();
+    if (!followSelected) return;
+    try {
+      const res = await fetch('/api/call-logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...callForm, customerId: followSelected.id })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        showToast(data.error || 'บันทึกการโทรไม่สำเร็จ', 'error');
+        return;
+      }
+      showToast(`บันทึกการโทรของ ${followSelected.name || followSelected.email} แล้ว`);
+      setCallForm(form => ({ ...form, notes: '' }));
+      fetchAllData();
+    } catch (err) {
+      showToast('เกิดข้อผิดพลาด: ' + err.message, 'error');
+    }
+  };
+
   const masterEmailSet = new Set(masterData.map(m => (m.email || '').trim().toLowerCase()));
   const isForwarded = status => ['Sent', 'Forwarded', 'Manually Forwarded'].includes(status);
-  // Needs Review = อีเมลขาเข้าที่ผู้ส่งไม่อยู่ใน Master Data รอเจ้าหน้าที่ตรวจสอบ (เพิ่มเข้า Master Data / ส่งต่อเอง / ปิดรายการแล้วจะหายไป)
-  const isNeedsReview = item => item.status === 'Needs Review' && !masterEmailSet.has((item.recipientEmail || '').trim().toLowerCase());
+  // Needs Review = อีเมลขาเข้าที่ไม่ผ่านเงื่อนไขส่งต่ออัตโนมัติ (ผู้ส่งไม่อยู่ใน Master Data หรือไม่ใช่การตอบกลับและหัวข้อไม่มี prefix)
+  // ออกจากรายการเมื่อเจ้าหน้าที่ส่งต่อเอง (Manually Forwarded) หรือปิดรายการ (Closed)
+  const isNeedsReview = item => item.status === 'Needs Review';
+  const inMaster = email => masterEmailSet.has((email || '').trim().toLowerCase());
+  const dataProblems = item => item.reviewReason || (item.dataIssues || []).join(', ');
+  const isIncomplete = item => item.dataStatus === 'ข้อมูลไม่ครบ' || (item.dataIssues || []).length > 0;
+  const dataBadge = item => (isIncomplete(item) ? 'badge-review' : item.dataStatus === 'Invalid' ? 'badge-failed' : 'badge-sent');
+  const filteredMaster = masterData.filter(item =>
+    masterFilter === 'INCOMPLETE' ? isIncomplete(item) : masterFilter === 'INVALID' ? item.dataStatus === 'Invalid' : true
+  );
   const isPendingStatus = status => status === 'Pending' || status === 'Failed'; // ค้างส่ง / รอ Retry
 
   // Filter Emails
@@ -820,6 +963,19 @@ export default function App() {
             </button>
 
             <button
+              onClick={() => setCurrentTab('follow-up')}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
+                currentTab === 'follow-up' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:bg-slate-800/60 hover:text-white'
+              }`}
+            >
+              <span className="text-base">📞</span>
+              <span className="flex-1 text-left">ติดตามลูกค้า</span>
+              {followCounts.TODAY + followCounts.OVERDUE > 0 && (
+                <span className="bg-amber-400 text-amber-950 text-[10px] font-bold px-1.5 rounded-full">{followCounts.TODAY + followCounts.OVERDUE}</span>
+              )}
+            </button>
+
+            <button
               onClick={() => setCurrentTab('templates')}
               className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
                 currentTab === 'templates' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:bg-slate-800/60 hover:text-white'
@@ -1130,7 +1286,7 @@ export default function App() {
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">Needs Review (ไม่พบใน Master Data)</h2>
-                  <p className="text-xs text-slate-500">อีเมลที่ส่งเข้ามา แต่อีเมลผู้ส่งไม่อยู่ใน Master Data เจ้าหน้าที่ต้องตรวจสอบก่อน (ตรวจสอบ → ส่งต่อ / เพิ่มเข้า Master Data / ปิดรายการ)</p>
+                  <p className="text-xs text-slate-500">อีเมลขาเข้าที่ระบบไม่ส่งต่ออัตโนมัติ เจ้าหน้าที่ต้องตรวจสอบก่อน (ตรวจสอบ → ส่งต่ออีกครั้ง / เพิ่มผู้ส่งเข้า Master Data / ปิดรายการ)</p>
                 </div>
                 <div className="bg-amber-50 text-amber-800 border border-amber-200 px-3 py-1.5 rounded-xl text-xs font-bold">
                   {needsReviewEmails.length} รายการรอการตรวจสอบ
@@ -1142,8 +1298,9 @@ export default function App() {
                   <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
                     <tr>
                       <th className="p-3.5 pl-5">วันที่/เวลา</th>
-                      <th className="p-3.5">อีเมลผู้ส่ง (ไม่อยู่ใน Master Data)</th>
+                      <th className="p-3.5">อีเมลผู้ส่ง</th>
                       <th className="p-3.5">หัวข้ออีเมล</th>
+                      <th className="p-3.5">เหตุผล</th>
                       <th className="p-3.5 text-right pr-5">การดำเนินการ</th>
                     </tr>
                   </thead>
@@ -1151,8 +1308,9 @@ export default function App() {
                     {needsReviewEmails.map((item, idx) => (
                       <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
                         <td className="p-3.5 pl-5 text-slate-500 whitespace-nowrap">{item.timestamp}</td>
-                        <td className="p-3.5 font-bold text-red-600">{item.recipientEmail}</td>
+                        <td className={`p-3.5 font-bold ${inMaster(item.recipientEmail) ? 'text-slate-700' : 'text-red-600'}`}>{item.recipientEmail}</td>
                         <td className="p-3.5 text-slate-700 font-medium truncate max-w-sm">{item.subject}</td>
+                        <td className="p-3.5 text-slate-500 max-w-xs">{item.errorDetail || '-'}</td>
                         <td className="p-3.5 text-right pr-5 space-x-2">
                           <button
                             onClick={() => setSelectedEmail(item)}
@@ -1160,12 +1318,14 @@ export default function App() {
                           >
                             ตรวจสอบ
                           </button>
-                          <button
-                            onClick={() => handleQuickWhitelist(item.recipientEmail, item.customerName)}
-                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold shadow-xs cursor-pointer"
-                          >
-                            + เพิ่มเข้า Master Data ทันที
-                          </button>
+                          {!inMaster(item.recipientEmail) && (
+                            <button
+                              onClick={() => handleQuickWhitelist(item.recipientEmail, item.customerName)}
+                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold shadow-xs cursor-pointer"
+                            >
+                              + เพิ่มเข้า Master Data ทันที
+                            </button>
+                          )}
                           <button
                             onClick={() => handleCloseEmail(item.id)}
                             className="px-3 py-1.5 border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-lg font-medium cursor-pointer"
@@ -1203,12 +1363,32 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+              <div className="flex flex-wrap gap-2 text-xs">
+                {[
+                  ['ALL', `ทั้งหมด (${masterData.length})`],
+                  ['INCOMPLETE', `ข้อมูลไม่ครบ (${masterData.filter(isIncomplete).length})`],
+                  ['INVALID', `Invalid (${masterData.filter(m => m.dataStatus === 'Invalid').length})`]
+                ].map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => setMasterFilter(key)}
+                    className={`px-3 py-1.5 rounded-lg font-semibold cursor-pointer border ${masterFilter === key ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+                {masterFilter === 'INCOMPLETE' && (
+                  <span className="self-center text-slate-500">ลูกค้ากลุ่มนี้จะไม่ได้รับอีเมลแจ้งเตือนจนกว่าจะแก้อีเมลหรือเพิ่มวันหมดอายุ (กดปุ่ม ต่ออายุ เพื่อใส่วันหมดอายุ)</span>
+                )}
+              </div>
+
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
                     <tr>
                       <th className="p-3.5 pl-5">No.</th>
                       <th className="p-3.5">อีเมล (Whitelist)</th>
+                      <th className="p-3.5">เบอร์โทร</th>
                       <th className="p-3.5">ชื่อ / หมายเหตุ</th>
                       <th className="p-3.5">ประเภทประกัน</th>
                       <th className="p-3.5">วันหมดอายุ</th>
@@ -1218,17 +1398,19 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {masterData.map((item, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="p-3.5 pl-5 text-slate-400 font-mono">{idx + 1}</td>
+                    {filteredMaster.map((item, idx) => (
+                      <tr key={item.id || idx} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="p-3.5 pl-5 text-slate-400 font-mono">{item.id || idx + 1}</td>
                         <td className="p-3.5 font-bold text-slate-800">{item.email}</td>
+                        <td className="p-3.5 text-slate-600 whitespace-nowrap">{item.phone || '-'}</td>
                         <td className="p-3.5 text-slate-700">{item.name || item.notes || '-'}</td>
                         <td className="p-3.5 text-slate-600">{item.type || '-'}</td>
                         <td className="p-3.5 text-slate-600">{item.expiry || '-'}</td>
                         <td className="p-3.5 text-center">
-                          <span className="badge-sent px-2.5 py-0.5 rounded-full font-bold text-[11px]">
-                            {item.dataStatus || '-'}
+                          <span className={`${dataBadge(item)} px-2.5 py-0.5 rounded-full font-bold text-[11px] whitespace-nowrap`}>
+                            {isIncomplete(item) ? 'ข้อมูลไม่ครบ' : item.dataStatus || 'Valid'}
                           </span>
+                          {isIncomplete(item) && <div className="text-[11px] text-amber-700 mt-1">{dataProblems(item)}</div>}
                         </td>
                         <td className="p-3.5 text-center text-slate-700">{item.customerStatus || '-'}</td>
                         <td className="p-3.5 text-right pr-5">
@@ -1266,6 +1448,208 @@ export default function App() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================================= */}
+          {/* TAB: FOLLOW-UP (ติดตามลูกค้า: คิวโทร + บันทึกการโทร)                        */}
+          {/* ========================================================================= */}
+          {currentTab === 'follow-up' && (
+            <div className="space-y-5">
+              <div>
+                <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">ติดตามลูกค้า</h2>
+                <p className="text-xs text-slate-500">คิวโทรหลังส่งอีเมลแจ้งเตือน R1/R2 และบันทึกผลการโทร (บันทึกลงชีต Call_Logs และอัปเดตสถานะลูกค้าใน Master Data)</p>
+              </div>
+
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                {[
+                  ['TODAY', 'ต้องโทรวันนี้', 'text-amber-600'],
+                  ['OVERDUE', 'เลยกำหนดนัด', 'text-red-600'],
+                  ['NEVER', 'ยังไม่เคยโทร (หลังส่งอีเมล)', 'text-blue-600'],
+                  ['ALL', 'ลูกค้าในคิวทั้งหมด', 'text-slate-800']
+                ].map(([key, label, color]) => (
+                  <button
+                    key={key}
+                    onClick={() => setFollowFilter(key)}
+                    className={`text-left bg-white border rounded-2xl p-4 cursor-pointer ${followFilter === key ? 'border-blue-500 ring-2 ring-blue-100' : 'border-slate-200 hover:border-slate-300'}`}
+                  >
+                    <div className="text-xs text-slate-500">{label}</div>
+                    <div className={`text-2xl font-black mt-1 ${color}`}>{followCounts[key]}</div>
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex flex-col xl:flex-row gap-5 items-start">
+                <div className="flex-1 min-w-0 w-full bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+                  <div className="flex flex-wrap gap-1.5 p-3 border-b border-slate-200 text-xs">
+                    {[
+                      ['ALL', `ทั้งหมด (${followCounts.ALL})`],
+                      ['TODAY', `ต้องโทรวันนี้ (${followCounts.TODAY})`],
+                      ['OVERDUE', `เลยกำหนด (${followCounts.OVERDUE})`],
+                      ['NEVER', `ยังไม่เคยโทร (${followCounts.NEVER})`],
+                      ['R1', 'หลังส่ง R1'],
+                      ['R2', 'หลังส่ง R2']
+                    ].map(([key, label]) => (
+                      <button
+                        key={key}
+                        onClick={() => setFollowFilter(key)}
+                        className={`px-3 py-1.5 rounded-lg font-semibold cursor-pointer border ${followFilter === key ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs min-w-[720px]">
+                      <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
+                        <tr>
+                          <th className="p-3.5 pl-5">ลูกค้า</th>
+                          <th className="p-3.5">เบอร์โทร</th>
+                          <th className="p-3.5">อีเมลล่าสุด</th>
+                          <th className="p-3.5">วันหมดอายุ</th>
+                          <th className="p-3.5">สถานะลูกค้า</th>
+                          <th className="p-3.5">นัดครั้งถัดไป</th>
+                          <th className="p-3.5 pr-5"><span className="sr-only">การดำเนินการ</span></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {followRows.length === 0 && (
+                          <tr><td colSpan={7} className="p-6 text-center text-slate-400">ไม่มีลูกค้าในคิวนี้</td></tr>
+                        )}
+                        {followRows.map(f => {
+                          const due = dueLabel(f);
+                          return (
+                            <tr key={f.id} className={followSelectedId === f.id ? 'bg-blue-50/70' : 'hover:bg-slate-50/80'}>
+                              <td className="p-3.5 pl-5">
+                                <div className="font-bold text-slate-800">{f.name || f.email}</div>
+                                <div className="text-[11px] text-slate-500">{f.type || '-'}</div>
+                              </td>
+                              <td className="p-3.5 whitespace-nowrap">{f.phone || '-'}</td>
+                              <td className="p-3.5 whitespace-nowrap">{f.lastMail}</td>
+                              <td className="p-3.5 whitespace-nowrap">{f.expiry || '-'}</td>
+                              <td className="p-3.5"><span className={`px-2.5 py-0.5 rounded-full font-bold text-[11px] whitespace-nowrap ${customerStatusBadge(f.customerStatus)}`}>{f.customerStatus || 'รอดำเนินการ'}</span></td>
+                              <td className="p-3.5 whitespace-nowrap"><span className={`px-2.5 py-0.5 rounded-full font-bold text-[11px] ${due.cls}`}>{due.text}</span></td>
+                              <td className="p-3.5 pr-5 text-right">
+                                <button
+                                  onClick={() => openCallForm(f)}
+                                  className={`px-3 py-1.5 rounded-lg font-bold whitespace-nowrap cursor-pointer ${followSelectedId === f.id ? 'bg-blue-600 text-white' : 'border border-blue-200 text-blue-700 hover:bg-blue-50'}`}
+                                >
+                                  บันทึกการโทร
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="px-4 py-3 border-t border-slate-200 text-[11px] text-slate-500">แสดงลูกค้าที่ได้รับอีเมล R1/R2 แล้ว และสถานะยังไม่ใช่ "ไม่ติดต่อ / ปิดงาน" เรียง เลยกำหนด → วันนี้ → ยังไม่เคยโทร → นัดล่วงหน้า</p>
+                </div>
+
+                {followSelected && (
+                  <aside className="w-full xl:w-[400px] shrink-0 bg-white rounded-2xl border border-slate-200 shadow-xs">
+                    <div className="p-4 border-b border-slate-200 flex justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-[11px] text-slate-500">บันทึกการโทร</div>
+                        <div className="text-base font-bold text-slate-800">{followSelected.name || followSelected.email}</div>
+                        <div className="text-xs text-slate-600">{followSelected.phone || 'ไม่มีเบอร์โทร'} · {followSelected.policy || '-'} · หมดอายุ {followSelected.expiry || '-'}</div>
+                      </div>
+                      <button onClick={() => setFollowSelectedId(null)} aria-label="ปิดแผงบันทึกการโทร" className="w-8 h-8 rounded-lg border border-slate-200 text-slate-400 hover:text-slate-600 cursor-pointer">✕</button>
+                    </div>
+
+                    <form onSubmit={handleSaveCall} className="p-4 space-y-3 text-xs">
+                      <fieldset>
+                        <legend className="font-semibold text-slate-700 mb-1.5">ผลการโทร</legend>
+                        <div className="flex flex-wrap gap-1.5">
+                          {['ติดต่อได้', 'ไม่รับสาย', 'เบอร์ไม่ถูกต้อง'].map(r => (
+                            <button
+                              key={r}
+                              type="button"
+                              aria-pressed={callForm.callResult === r}
+                              onClick={() => setCallForm({ ...callForm, callResult: r })}
+                              className={`px-3 py-1.5 rounded-lg border cursor-pointer ${callForm.callResult === r ? 'border-blue-600 bg-blue-50 text-blue-700 font-bold' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+                            >
+                              {r}
+                            </button>
+                          ))}
+                        </div>
+                      </fieldset>
+                      <div>
+                        <label htmlFor="call-status" className="block font-semibold text-slate-700 mb-1">สถานะลูกค้า</label>
+                        <select
+                          id="call-status"
+                          value={callForm.customerStatus}
+                          onChange={(e) => setCallForm({ ...callForm, customerStatus: e.target.value })}
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                        >
+                          {CUSTOMER_STATUSES.map(st => (
+                            <option key={st} value={st}>{st}{CUSTOMER_STATUS_HINTS[st] || ''}</option>
+                          ))}
+                          {callForm.customerStatus && !CUSTOMER_STATUSES.includes(callForm.customerStatus) && <option>{callForm.customerStatus}</option>}
+                        </select>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label htmlFor="call-next" className="block font-semibold text-slate-700 mb-1">นัดครั้งถัดไป</label>
+                          <input
+                            id="call-next"
+                            type="date"
+                            min={todayIso}
+                            value={callForm.nextFollowup}
+                            onChange={(e) => setCallForm({ ...callForm, nextFollowup: e.target.value })}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="call-agent" className="block font-semibold text-slate-700 mb-1">ผู้รับผิดชอบ</label>
+                          <input
+                            id="call-agent"
+                            type="text"
+                            value={callForm.assignedAgent}
+                            onChange={(e) => setCallForm({ ...callForm, assignedAgent: e.target.value })}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label htmlFor="call-notes" className="block font-semibold text-slate-700 mb-1">บันทึก</label>
+                        <textarea
+                          id="call-notes"
+                          rows={3}
+                          value={callForm.notes}
+                          onChange={(e) => setCallForm({ ...callForm, notes: e.target.value })}
+                          placeholder="สรุปสิ่งที่คุยกับลูกค้า"
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <p className="text-[11px] text-slate-400">ไม่ใส่วันนัด = ล้างวันนัดเดิมของลูกค้ารายนี้</p>
+                      <div className="flex justify-end gap-2 pt-1">
+                        <button type="button" onClick={() => setFollowSelectedId(null)} className="px-4 py-2 border border-slate-200 text-slate-600 rounded-xl font-semibold hover:bg-slate-50 cursor-pointer">ยกเลิก</button>
+                        <button type="submit" className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-xs cursor-pointer">บันทึกผลการโทร</button>
+                      </div>
+                    </form>
+
+                    <div className="p-4 border-t border-slate-200">
+                      <h3 className="text-xs font-bold text-slate-700 mb-2">ประวัติลูกค้า</h3>
+                      {followHistory.length === 0 ? (
+                        <p className="text-xs text-slate-400">ยังไม่มีประวัติ</p>
+                      ) : (
+                        <ol className="space-y-2.5">
+                          {followHistory.map(h => (
+                            <li key={h.key} className="flex gap-2.5 text-xs">
+                              <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${h.kind === 'call' ? 'bg-blue-600' : 'bg-emerald-600'}`}></span>
+                              <div className="min-w-0">
+                                <div className="font-semibold text-slate-800">{h.title}</div>
+                                <div className="text-[11px] text-slate-500 break-words">{h.time}{h.detail ? ` · ${h.detail}` : ''}</div>
+                              </div>
+                            </li>
+                          ))}
+                        </ol>
+                      )}
+                    </div>
+                  </aside>
+                )}
               </div>
             </div>
           )}
@@ -1450,10 +1834,34 @@ export default function App() {
                         </div>
                         <input
                           type="checkbox"
-                          checked={config.system.auto_forward === 'true' || config.system.auto_forward === true}
+                          checked={String(config.system.auto_forward).toLowerCase() === 'true'}
                           onChange={(e) => setConfig({ ...config, system: { ...config.system, auto_forward: e.target.checked ? 'true' : 'false' } })}
                           className="w-5 h-5 accent-blue-600 rounded cursor-pointer"
                         />
+                      </div>
+
+                      <div className="pt-3 border-t border-slate-100">
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Prefix หัวข้ออีเมลที่ส่งต่อได้</label>
+                        <input
+                          type="text"
+                          value={config.system.subject_prefixes || ''}
+                          onChange={(e) => setConfig({ ...config, system: { ...config.system, subject_prefixes: e.target.value } })}
+                          placeholder="[PorInsurance], [แจ้งเตือนครบกำหนด"
+                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 font-mono"
+                        />
+                        <span className="text-[11px] text-slate-400 mt-1 block">คั่นด้วยเครื่องหมาย , ใช้กับผู้ส่งที่อยู่ใน Master Data และไม่ใช่การตอบกลับอีเมลของระบบ ถ้าหัวข้อไม่มี prefix จะเข้า Needs Review</span>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">ID โฟลเดอร์ Google Drive เก็บไฟล์แนบ</label>
+                        <input
+                          type="text"
+                          value={config.system.attachment_folder_id || ''}
+                          onChange={(e) => setConfig({ ...config, system: { ...config.system, attachment_folder_id: e.target.value } })}
+                          placeholder="ส่วนท้ายของลิงก์โฟลเดอร์ เช่น drive.google.com/drive/folders/<ID>"
+                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 font-mono"
+                        />
+                        <span className="text-[11px] text-slate-400 mt-1 block">ต้องแชร์โฟลเดอร์ให้อีเมล Service Account ของระบบ (ผู้มีสิทธิ์อ่าน) เพื่อให้เปิดดูไฟล์ในเว็บได้ ว่าง = ไม่เก็บไฟล์แนบ</span>
                       </div>
 
                       <div className="pt-3">
@@ -1720,6 +2128,28 @@ export default function App() {
                   </div>
                 ))}
               </dl>
+
+              <div className="mt-5">
+                <h4 className="text-xs font-bold text-slate-700 mb-2">ไฟล์แนบ ({(selectedEmail.attachments || []).length})</h4>
+                {(selectedEmail.attachments || []).length === 0 ? (
+                  <p className="text-xs text-slate-400">ไม่มีไฟล์แนบ</p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {selectedEmail.attachments.map((file, index) => (
+                      <div key={file.id || `${file.name}-${index}`} className="flex items-center justify-between gap-2 border border-slate-200 rounded-xl px-3 py-2 text-xs">
+                        <div className="min-w-0">
+                          <div className="font-semibold text-slate-800 truncate">{file.name}</div>
+                          <div className="text-[11px] text-slate-400">{file.mimeType}{file.size ? ` • ${file.size}` : ''}</div>
+                        </div>
+                        <div className="flex gap-1 shrink-0">
+                          <button onClick={() => setPreviewFile({ ...file, url: attachmentUrl(selectedEmail, file, index) })} className="px-2.5 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg font-semibold cursor-pointer">ดู</button>
+                          <a href={`${attachmentUrl(selectedEmail, file, index)}?download=1`} className="px-2.5 py-1 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg font-semibold">ดาวน์โหลด</a>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -1811,6 +2241,17 @@ export default function App() {
                   <option value="Invalid">Invalid (ห้ามส่งอีเมล)</option>
                   {!['', 'Valid', 'Invalid'].includes(customerForm.dataStatus || '') && <option>{customerForm.dataStatus}</option>}
                 </select>
+                <span className="text-[11px] text-slate-400 mt-1 block">ถ้าอีเมลไม่ถูกต้องหรือไม่มีวันหมดอายุ ระบบจะตั้งเป็น "ข้อมูลไม่ครบ" ให้อัตโนมัติ และกลับเป็น Valid เมื่อข้อมูลครบ</span>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">หมายเหตุ</label>
+                <textarea
+                  rows={2}
+                  value={customerForm.notes || ''}
+                  onChange={(e) => setCustomerForm({ ...customerForm, notes: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                />
               </div>
 
               {editingCustomer && (
@@ -1864,6 +2305,35 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: ATTACHMENT PREVIEW (แสดงไฟล์แนบจาก Google Drive ภายในเว็บ)            */}
+      {/* ========================================================================= */}
+      {previewFile && (
+        <div className="fixed inset-0 bg-slate-900/70 z-[60] flex items-center justify-center p-4" onClick={() => setPreviewFile(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between gap-3">
+              <div className="text-sm font-bold text-slate-800 truncate">{previewFile.name}</div>
+              <div className="flex items-center gap-2 shrink-0">
+                <a href={`${previewFile.url}?download=1`} className="px-3 py-1.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg text-xs font-semibold">ดาวน์โหลด</a>
+                <button onClick={() => setPreviewFile(null)} className="w-8 h-8 rounded-lg text-slate-400 hover:text-slate-600 cursor-pointer">✕</button>
+              </div>
+            </div>
+            <div className="flex-1 bg-slate-100 flex items-center justify-center overflow-auto">
+              {PREVIEW_IMAGE_TYPES.includes(previewFile.mimeType) ? (
+                <img src={previewFile.url} alt={previewFile.name} className="max-w-full max-h-full object-contain" />
+              ) : PREVIEW_FRAME_TYPES.includes(previewFile.mimeType) ? (
+                <iframe src={previewFile.url} title={previewFile.name} className="w-full h-full bg-white" />
+              ) : (
+                <div className="text-center text-xs text-slate-500 p-6">
+                  <p className="mb-3">ไฟล์ชนิดนี้ ({previewFile.mimeType}) แสดงตัวอย่างในเว็บไม่ได้</p>
+                  <a href={`${previewFile.url}?download=1`} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold">ดาวน์โหลดไฟล์</a>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

@@ -163,3 +163,10 @@ n8n import:workflow --separate --input=./workflows/
 | **Import Credentials เข้า n8n** | `n8n import:credentials --input=./credentials.json` |
 | **ดูรายชื่อ Workflows ในระบบ** | `n8n list:workflow` |
 | **Deploy บน Docker Server** | `docker compose up -d --build` |
+
+### Docker (docker-compose.yml)
+* **service `n8n`** (`Dockerfile` ที่โฟลเดอร์ราก): n8n 2.8.4 (pin ตรงกับที่ใช้พัฒนา เปลี่ยนได้ด้วย build arg `N8N_VERSION`) พร้อม workflow ที่ใช้งานจริง 2 ไฟล์ใน `/home/node/workflows` ค่าอ่านจาก `.env` ที่โฟลเดอร์ราก (`N8N_ENCRYPTION_KEY`, `WEBHOOK_URL` ฯลฯ ดู `.env.example`)
+* **service `web`** (`sheets-app/Dockerfile`): build หน้าเว็บด้วย Vite แล้วให้ server Express เสิร์ฟทั้งหน้าเว็บและ `/api` ที่พอร์ต 5000 (`WEB_PORT`) ค่าลับอ่านจาก `sheets-app/server/.env` (ดู `sheets-app/server/.env.example`)
+* ในชีต `config` ตั้ง `n8n_webhook_url` เป็น `http://n8n:5678/webhook/re-forward` เพื่อให้เว็บเรียก n8n ภายใน network ของ compose
+* `.dockerignore` ที่โฟลเดอร์รากส่งเฉพาะ `workflows/` เข้า build context (`node_modules` ที่รากมีขนาดหลาย GB)
+* workflow ทั้งสองมี id คงที่ (`AutoMailOutbound`, `AutoMailInbound2`) Jenkins import ซ้ำทุก deploy จะอัปเดต workflow เดิม แต่ workflow ที่ import ใหม่จะยังปิดอยู่ ต้องเปิด Active หรือ publish เองครั้งแรก

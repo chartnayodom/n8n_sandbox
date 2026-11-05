@@ -280,3 +280,8 @@ When the user asks you to set up or update this project, execute these steps in 
 ## Document Rules
 1. จะต้องเขียนรายงานสิ่งที่ไปทั้งหมดใน Artifact เอาไว้ รวมถึงสกิล, MCP ที่ใช้งาน
 2. บันทึกรายการ Local Conversations ของ Agent ไว้ทั้งหมดให้สามารถ Traceback ได้
+
+## skill using
+1. สกิลหลักที่จะใช้คือ grill-with-docs, caveman, ponytail, karpathy-guidelines
+2. ในการทดสอบจะใช้สกิล debug-mantra, code-reviewer, verify
+3. กรณีที่ทดสอบหน้าเว็บใช้ mcp ต่อกับ google chrome ได้เลย
