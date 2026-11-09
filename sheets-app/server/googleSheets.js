@@ -69,60 +69,25 @@ function logActivity(action, details, user = 'Admin', status = 'Success') {
 // 0. AUTHENTICATION & TWO-TIER AUTHORIZATION
 // ==========================================
 
-async function checkDrivePermission(email) {
-  try {
-    const drive = getDriveClient();
-    const res = await drive.permissions.list({
-      fileId: SPREADSHEET_ID(),
-      fields: 'permissions(id, emailAddress, role, displayName)'
-    });
-    const permissions = res.data.permissions || [];
-    const matched = permissions.find(p => p.emailAddress && p.emailAddress.toLowerCase() === email.toLowerCase());
-    if (matched) {
-      return { hasPermission: true, role: matched.role, displayName: matched.displayName || matched.emailAddress };
-    }
-    return { hasPermission: false };
-  } catch (err) {
-    console.error('Error checking Drive permission:', err);
-    // If Drive API call fails, fallback to config sheet check
-    return { hasPermission: true, role: 'viewer', fallback: true };
-  }
+// Role ใน USER_ACCESS: Admin | Staff | Viewer (ไม่สนตัวพิมพ์) ค่าว่าง/สะกดผิด = Viewer (สิทธิ์ต่ำสุด)
+const ROLES = ['Admin', 'Staff', 'Viewer'];
+const normalizeRole = role => ROLES.find(r => r.toLowerCase() === String(role || '').trim().toLowerCase()) || 'Viewer';
+
+// หาเจ้าหน้าที่ในแถว USER_ACCESS ของชีต config ไม่พบ = null
+async function findAccessUser(email) {
+  const target = String(email || '').trim().toLowerCase();
+  const user = (await getConfig()).users.find(u => u.email.toLowerCase() === target);
+  return user ? { email: user.email, name: user.name || user.email.split('@')[0], role: user.role } : null;
 }
 
 async function verifyUserAccess(email) {
   if (!email) throw new Error('Email is required for authentication');
-
-  // Tier 1: Check Drive Permission
-  const driveCheck = await checkDrivePermission(email);
-  if (!driveCheck.hasPermission) {
-    return {
-      allowed: false,
-      tier: 'drive',
-      message: `อีเมล ${email} ไม่มีสิทธิ์เข้าถึง Google Spreadsheet บน Google Drive`
-    };
+  const user = await findAccessUser(email);
+  if (!user) {
+    return { allowed: false, message: `อีเมล ${email} ยังไม่ได้รับอนุญาตให้เข้าระบบ (กรุณาให้ Admin เพิ่มในหน้าตั้งค่า)` };
   }
-
-  // Tier 2: Check User in Config Sheet
-  const config = await getConfig();
-  const allowedUser = config.users.find(u => u.email.toLowerCase() === email.toLowerCase());
-
-  if (!allowedUser) {
-    return {
-      allowed: false,
-      tier: 'config',
-      driveAllowed: true,
-      message: `อีเมล ${email} มีสิทธิ์ใน Drive แต่ยังไม่ได้รับอนุญาตในระบบ (กรุณาให้ผู้ดูแลเพิ่มในหน้าตั้งค่า)`
-    };
-  }
-
-  logActivity('USER_LOGIN', `${email} เข้าสู่ระบบสำเร็จ (สิทธิ์: ${allowedUser.role})`, allowedUser.name, 'Success');
-
-  return {
-    allowed: true,
-    email: allowedUser.email,
-    name: allowedUser.name || driveCheck.displayName || email.split('@')[0],
-    role: allowedUser.role || 'Viewer'
-  };
+  logActivity('USER_LOGIN', `${email} เข้าสู่ระบบสำเร็จ (สิทธิ์: ${user.role})`, user.name, 'Success');
+  return { allowed: true, ...user };
 }
 
 // ==========================================
@@ -156,7 +121,7 @@ async function getConfig() {
     } else if (category === 'DRIVE_LINK') {
       driveLinks.push({ name: key, url: value, description, _rowIndex: rowIndex });
     } else if (category === 'USER_ACCESS') {
-      users.push({ email: key, name: value, role: permissionRole || 'Viewer', description, _rowIndex: rowIndex });
+      users.push({ email: key, name: value, role: normalizeRole(permissionRole), description, _rowIndex: rowIndex });
     }
   });
 
@@ -275,7 +240,7 @@ async function getMasterData() {
 
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID(),
-    range: 'Master_Data!A2:Q'
+    range: 'Master_Data!A2:R'
   });
 
   const rows = res.data.values || [];
@@ -297,6 +262,7 @@ async function getMasterData() {
     nextFollowup: r[14] || '',
     assignedAgent: r[15] || '',
     notes: r[16] || '',
+    currentInsurer: r[17] || '', // R: บริษัทประกันปัจจุบันของลูกค้า (อ้างอิงเท่านั้น ไม่มีผลกับปลายทางการส่งต่อ)
     dataIssues: dataIssues({ email: r[2], expiry: r[6] }), // ตรวจตอนอ่านด้วย เผื่อมีการแก้ในชีตโดยตรง
     _rowIndex: idx + 2
   }));
@@ -330,12 +296,13 @@ async function addMasterData(item) {
     item.customerStatus || '',
     item.nextFollowup || '',
     item.assignedAgent || '',
-    item.notes || ''
+    item.notes || '',
+    item.currentInsurer || ''
   ];
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID(),
-    range: 'Master_Data!A:Q',
+    range: 'Master_Data!A:R',
     valueInputOption: 'USER_ENTERED',
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values: [newRow] }
@@ -390,12 +357,13 @@ async function updateMasterData(id, item) {
     item.customerStatus !== undefined ? item.customerStatus : found.customerStatus,
     found.nextFollowup,
     found.assignedAgent,
-    item.notes !== undefined ? item.notes : found.notes
+    item.notes !== undefined ? item.notes : found.notes,
+    item.currentInsurer !== undefined ? item.currentInsurer : found.currentInsurer
   ];
 
   await sheets.spreadsheets.values.update({
     spreadsheetId: SPREADSHEET_ID(),
-    range: `Master_Data!A${found._rowIndex}:Q${found._rowIndex}`,
+    range: `Master_Data!A${found._rowIndex}:R${found._rowIndex}`,
     valueInputOption: 'USER_ENTERED',
     requestBody: { values: [updatedRow] }
   });
@@ -544,6 +512,14 @@ async function getEmailLogs() {
     attachments: parseAttachments(attRows[idx]?.[0]),
     _rowIndex: idx + 2
   }));
+}
+
+// เนื้อหาอีเมล (Email_Logs!K Original_Body, HTML ยาวสูงสุด 40,000 ตัวอักษร) อ่านทีละแถวเมื่อเปิดอ่าน ไม่โหลดพร้อมรายการ
+async function getEmailBody(rowIndex) {
+  const sheets = getSheetsClient();
+  if (!sheets) throw new Error('Google Sheets credentials not configured');
+  const res = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID(), range: `Email_Logs!K${rowIndex}` });
+  return res.data.values?.[0]?.[0] || '';
 }
 
 function parseAttachments(text) {
@@ -805,8 +781,8 @@ async function getDashboardSummary() {
 
 module.exports = {
   isConfigured,
-  checkDrivePermission,
   verifyUserAccess,
+  findAccessUser,
   getConfig,
   saveConfigItem,
   deleteConfigItem,
@@ -815,6 +791,7 @@ module.exports = {
   updateMasterData,
   renewMasterData,
   getEmailLogs,
+  getEmailBody,
   addEmailLog,
   reForwardEmail,
   setEmailLogStatus,

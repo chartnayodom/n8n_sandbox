@@ -1,6 +1,11 @@
 {
-  "name": "01 - AutoMail Outbound R1/R2 (v2 Master_Data)",
+  "updatedAt": "2026-11-08T16:05:30.815Z",
+  "createdAt": "2026-11-08T15:13:13.116Z",
   "id": "AutoMailOutbound",
+  "name": "01 - AutoMail Outbound R1/R2 (v2 Master_Data)",
+  "description": null,
+  "active": false,
+  "isArchived": false,
   "nodes": [
     {
       "parameters": {
@@ -38,10 +43,6 @@
         "values": {
           "string": [
             {
-              "name": "admin_report_email",
-              "value": "baipor2545@hotmail.com"
-            },
-            {
               "name": "sender_email",
               "value": "baipor_insurance@hotmail.com"
             },
@@ -58,14 +59,7 @@
               "value": "R2 - 3 เดือน"
             },
             {
-              "name": "test_recipient_email",
-              "value": ""
-            }
-          ],
-          "number": [
-            {
-              "name": "months_ahead",
-              "value": 3
+              "name": "test_recipient_email"
             }
           ]
         },
@@ -105,26 +99,26 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [
-        1120,
+        1600,
         224
       ],
       "credentials": {
         "googleApi": {
-          "id": "apU1LNQcR7cMOpnJ",
+          "id": "mqkHhADlTD99e0LW",
           "name": "Google Service Account account"
         }
       }
     },
     {
       "parameters": {
-        "jsCode": "// 3. กรองข้อมูล: ตรวจสอบวันหมดอายุ (Expiry_Date) รอบ 6 เดือน และรอบ 3 เดือน\nconst results = [];\nconst DAY_MS = 24 * 60 * 60 * 1000;\n\n// วันนี้ตามเวลาไทย (ไม่ขึ้นกับ timezone ของเครื่องที่รัน n8n) เก็บเป็น UTC midnight เพื่อเทียบจำนวนวันตรงๆ\nconst [ty, tm, td] = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' }).split('-').map(Number);\nconst todayMs = Date.UTC(ty, tm - 1, td);\n\n// อ่านวันที่จากชีต: รองรับ yyyy-mm-dd และ dd/mm/yyyy (รูปแบบไทย) รวมปี พ.ศ.\n// ถ้าเลขกลางเกิน 12 แต่เลขหน้าไม่เกิน 12 ถือว่าเป็น mm/dd/yyyy แล้วสลับให้ (ชีตตั้ง locale สหรัฐ)\nfunction parseSheetDate(raw) {\n  const s = String(raw).trim();\n  let y, m, d;\n  let hit = s.match(/^(\\d{4})-(\\d{1,2})-(\\d{1,2})/);\n  if (hit) { y = +hit[1]; m = +hit[2]; d = +hit[3]; }\n  else if ((hit = s.match(/^(\\d{1,2})[\\/.-](\\d{1,2})[\\/.-](\\d{4})/))) {\n    d = +hit[1]; m = +hit[2]; y = +hit[3];\n    if (m > 12 && d <= 12) [d, m] = [m, d];\n  } else return null;\n  if (y > 2400) y -= 543;\n  if (m < 1 || m > 12 || d < 1 || d > 31) return null;\n  return Date.UTC(y, m - 1, d);\n}\n\nfor (const item of $input.all()) {\n  const row = item.json;\n  \n  const name = row['Customer_Name'] || row['Name'] || row['ชื่อ'] || row['name'] || '';\n  const email = row['Email'] || row['email'] || row['อีเมล'] || '';\n  const expiryDateRaw = row['Expiry_Date'] || row['due_date_to'] || row['dueDate'] || row['insurance_date_to'] || '';\n  const policyNo = row['Policy_No'] || row['policy'] || '';\n  const insuranceType = row['Insurance_Type'] || row['type'] || 'ประกันภัย';\n  \n  const r1Status = (row['Mail_R1_Status'] || '').trim();\n  const r2Status = (row['Mail_R2_Status'] || '').trim();\n  const done = s => ['Sent', 'สำเร็จ', 'Skipped'].includes(s); // Skipped = ตั้งใจไม่ส่งรอบนั้น\n  const dataStatus = (row['Data_Status'] || 'Valid').trim();\n  // สถานะลูกค้าหลังโทรติดตาม (ตั้งจากหน้าเว็บ) เช่น 'ยังไม่สนใจ', 'ไม่ติดต่อ / ปิดงาน'\n  // 'ปิดงาน' หยุดทุกรอบ, 'ไม่สนใจ' หยุดเฉพาะรอบ 3 เดือน (R2)\n  const customerStatus = String(row['Customer_Status'] || row['customerStatus'] || '').replace(/\\s+/g, '');\n  const closed = customerStatus.includes('ปิดงาน');\n  const notInterested = customerStatus.includes('ไม่สนใจ');\n  \n  // ข้ามรายการที่ไม่มี email หรือถูกระบุว่า Invalid\n  // ส่งเฉพาะข้อมูลที่ Valid (ว่าง = Valid) ข้าม Invalid / Needs Review และลูกค้าที่ปิดงานแล้ว\n  if (!email || dataStatus !== 'Valid' || closed) {\n    continue;\n  }\n  \n  if (!expiryDateRaw) continue;\n  const expiryMs = parseSheetDate(expiryDateRaw);\n  if (expiryMs === null) continue;\n\n  // คำนวณจำนวนวันก่อนหมดอายุ\n  const diffDays = Math.round((expiryMs - todayMs) / DAY_MS);\n  \n  let targetRound = null;\n  let roundLabel = '';\n  let monthsAhead = 0;\n  \n  // เกณฑ์รอบ 6 เดือน (R1): เหลือวันหมดอายุ 91 - 180 วัน (~3 ถึง 6 เดือน) และยังไม่เคยส่งรอบ R1\n  if (diffDays > 90 && diffDays <= 180) {\n    if (!done(r1Status)) {\n      targetRound = 'R1';\n      roundLabel = 'ล่วงหน้า 6 เดือน';\n      monthsAhead = 6;\n    }\n  }\n  // เกณฑ์รอบ 3 เดือน (R2): เหลือวันหมดอายุ 1 - 90 วัน (ภายใน 3 เดือน) และยังไม่เคยส่งรอบ R2\n  else if (diffDays > 0 && diffDays <= 90) {\n    if (!done(r2Status) && !notInterested) {\n      targetRound = 'R2';\n      roundLabel = 'ล่วงหน้า 3 เดือน';\n      monthsAhead = 3;\n    }\n  }\n  \n  if (targetRound) {\n    results.push({\n      json: {\n        ...row,\n        resolved_name: name || 'คุณลูกค้า',\n        resolved_email: email,\n        resolved_due_date: expiryDateRaw,\n        policy_no: policyNo,\n        customer_id: row['ID'] || row['id'] || row['No'] || row['No.'] || '',\n        insurance_type: insuranceType,\n        mail_round: targetRound,\n        round_label: roundLabel,\n        months_ahead: monthsAhead,\n        days_remaining: diffDays,\n        row_number: row.row_number || item.pairedItem?.item || null\n      }\n    });\n  }\n}\n\nreturn results;"
+        "jsCode": "// 3. กรองข้อมูล: ตรวจสอบวันหมดอายุ (Expiry_Date) ตามรอบ R1 / R2\nconst results = [];\nconst DAY_MS = 24 * 60 * 60 * 1000;\nconst { r1_days: R1_DAYS, r2_days: R2_DAYS } = $('Load Settings').first().json;\n\n// วันนี้ตามเวลาไทย (ไม่ขึ้นกับ timezone ของเครื่องที่รัน n8n) เก็บเป็น UTC midnight เพื่อเทียบจำนวนวันตรงๆ\nconst [ty, tm, td] = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' }).split('-').map(Number);\nconst todayMs = Date.UTC(ty, tm - 1, td);\n\n// อ่านวันที่จากชีต: รองรับ yyyy-mm-dd และ dd/mm/yyyy (รูปแบบไทย) รวมปี พ.ศ.\n// ถ้าเลขกลางเกิน 12 แต่เลขหน้าไม่เกิน 12 ถือว่าเป็น mm/dd/yyyy แล้วสลับให้ (ชีตตั้ง locale สหรัฐ)\nfunction parseSheetDate(raw) {\n  const s = String(raw).trim();\n  let y, m, d;\n  let hit = s.match(/^(\\d{4})-(\\d{1,2})-(\\d{1,2})/);\n  if (hit) { y = +hit[1]; m = +hit[2]; d = +hit[3]; }\n  else if ((hit = s.match(/^(\\d{1,2})[\\/.-](\\d{1,2})[\\/.-](\\d{4})/))) {\n    d = +hit[1]; m = +hit[2]; y = +hit[3];\n    if (m > 12 && d <= 12) [d, m] = [m, d];\n  } else return null;\n  if (y > 2400) y -= 543;\n  if (m < 1 || m > 12 || d < 1 || d > 31) return null;\n  return Date.UTC(y, m - 1, d);\n}\n\nfor (const item of $input.all()) {\n  const row = item.json;\n  \n  const name = row['Customer_Name'] || row['Name'] || row['ชื่อ'] || row['name'] || '';\n  const email = row['Email'] || row['email'] || row['อีเมล'] || '';\n  const expiryDateRaw = row['Expiry_Date'] || row['due_date_to'] || row['dueDate'] || row['insurance_date_to'] || '';\n  const policyNo = row['Policy_No'] || row['policy'] || '';\n  const insuranceType = row['Insurance_Type'] || row['type'] || 'ประกันภัย';\n  \n  const r1Status = (row['Mail_R1_Status'] || '').trim();\n  const r2Status = (row['Mail_R2_Status'] || '').trim();\n  const done = s => ['Sent', 'สำเร็จ', 'Skipped'].includes(s); // Skipped = ตั้งใจไม่ส่งรอบนั้น\n  const dataStatus = (row['Data_Status'] || 'Valid').trim();\n  // สถานะลูกค้าหลังโทรติดตาม (ตั้งจากหน้าเว็บ) เช่น 'ยังไม่สนใจ', 'ไม่ติดต่อ / ปิดงาน'\n  // 'ปิดงาน' หยุดทุกรอบ, 'ไม่สนใจ' หยุดเฉพาะรอบ 3 เดือน (R2)\n  const customerStatus = String(row['Customer_Status'] || row['customerStatus'] || '').replace(/\\s+/g, '');\n  const closed = customerStatus.includes('ปิดงาน');\n  const notInterested = customerStatus.includes('ไม่สนใจ');\n  \n  // ข้ามรายการที่ไม่มี email หรือถูกระบุว่า Invalid\n  // ส่งเฉพาะข้อมูลที่ Valid (ว่าง = Valid) ข้าม Invalid / Needs Review และลูกค้าที่ปิดงานแล้ว\n  if (!email || dataStatus !== 'Valid' || closed) {\n    continue;\n  }\n  \n  if (!expiryDateRaw) continue;\n  const expiryMs = parseSheetDate(expiryDateRaw);\n  if (expiryMs === null) continue;\n\n  // คำนวณจำนวนวันก่อนหมดอายุ\n  const diffDays = Math.round((expiryMs - todayMs) / DAY_MS);\n  \n  let targetRound = null;\n  let roundLabel = '';\n  let monthsAhead = 0;\n  \n  // R1: เหลือ (r2_days, r1_days] วัน / R2: เหลือ (0, r2_days] วัน (จำนวนวันจากชีต config)\n  // ลูกค้าที่เข้ามาเมื่อเลยช่วง R1 แล้ว ได้แค่ R2 (ไม่ส่ง R1 ย้อนหลัง)\n  if (diffDays > R2_DAYS && diffDays <= R1_DAYS) {\n    if (!done(r1Status)) {\n      targetRound = 'R1';\n      monthsAhead = Math.round(R1_DAYS / 30);\n      roundLabel = `ล่วงหน้า ${monthsAhead} เดือน`;\n    }\n  }\n  else if (diffDays > 0 && diffDays <= R2_DAYS) {\n    if (!done(r2Status) && !notInterested) {\n      targetRound = 'R2';\n      monthsAhead = Math.round(R2_DAYS / 30);\n      roundLabel = `ล่วงหน้า ${monthsAhead} เดือน`;\n    }\n  }\n  \n  if (targetRound) {\n    results.push({\n      json: {\n        ...row,\n        resolved_name: name || 'คุณลูกค้า',\n        resolved_email: email,\n        resolved_due_date: expiryDateRaw,\n        policy_no: policyNo,\n        customer_id: row['ID'] || row['id'] || row['No'] || row['No.'] || '',\n        insurance_type: insuranceType,\n        mail_round: targetRound,\n        round_label: roundLabel,\n        months_ahead: monthsAhead,\n        days_remaining: diffDays,\n        row_number: row.row_number || item.pairedItem?.item || null\n      }\n    });\n  }\n}\n\nreturn results;"
       },
       "id": "e4f8d21b-3001-4b1a-9876-000000000005",
       "name": "3. Filter due_date_to (3 Months) & Unsent",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1280,
+        1760,
         224
       ]
     },
@@ -137,33 +131,33 @@
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
       "position": [
-        1520,
+        2000,
         224
       ]
     },
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// 4.1-4.2 เติมค่าลงใน Template ที่ดึงจากชีต Templates (ดู node \"Pick Templates\")\n// ตัวแปรที่ใช้ใน template ได้: {{customerName}} {{policyNo}} {{bookingNo}} {{policyExpiry}} {{insuranceType}}\n//                              {{roundLabel}} {{monthsAhead}} {{driveLinks}} {{referenceId}}\nconst record = $input.item.json;\n// โหมดทดสอบ: ถ้า Global Config.test_recipient_email ไม่ว่าง จะส่งทุกฉบับไปที่อีเมลนั้นแทนอีเมลลูกค้า\nconst testTo = String($('Global Config').first().json.test_recipient_email || '').trim();\nconst tpl = $('Pick Templates').first().json[record.mail_round]; // R1 | R2\n\n// สร้าง Message-ID เฉพาะสำหรับใช้อ้างอิง\nconst customMessageId = `<n8n-${Date.now()}-${Math.random().toString(36).substring(2, 9)}@automail.internal>`;\n\nconst file1 = $('Download file1').first().binary?.data;\nconst file2 = $('Download file').first().binary?.data1;\n\nconst policyNo = record.policy_no || 'POL-REF';\nconst vars = {\n  customerName: record.resolved_name,\n  policyNo,\n  bookingNo: policyNo,\n  policyExpiry: record.resolved_due_date,\n  insuranceType: record.insurance_type || 'ประกันภัย',\n  roundLabel: record.round_label,\n  monthsAhead: record.months_ahead,\n  driveLinks: [file1, file2].filter(Boolean).map(f => f.fileName).join(', '),\n  referenceId: customMessageId\n};\n\nconst esc = s => s.replace(/[&<>\"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[ch]));\nconst fill = (text, escape) => text.replace(/\\{\\{\\s*(\\w+)\\s*\\}\\}/g, (_, k) => {\n  const v = String(vars[k] ?? '');\n  return escape ? esc(v) : v;\n});\n\nreturn {\n  json: {\n    ...record,\n    mail_subject: (testTo ? '[TEST] ' : '') + fill(tpl.subject, false),\n    send_to: testTo || record.resolved_email,\n    mail_html: fill(tpl.html, true),\n    generated_message_id: customMessageId,\n    sent_date: new Date().toISOString().split('T')[0]\n  },\n  binary: { data: file1, data1: file2 }\n};"
+        "jsCode": "// 4.1-4.2 เติมค่าลงใน Template ที่ดึงจากชีต Templates (ดู node \"Pick Templates\")\n// ตัวแปรที่ใช้ใน template ได้: {{customerName}} {{policyNo}} {{bookingNo}} {{policyExpiry}} {{insuranceType}}\n//                              {{roundLabel}} {{monthsAhead}} {{daysRemaining}} {{driveLinks}} {{referenceId}}\nconst record = $input.item.json;\n// โหมดทดสอบ: ถ้า Global Config.test_recipient_email ไม่ว่าง จะส่งทุกฉบับไปที่อีเมลนั้นแทนอีเมลลูกค้า\nconst testTo = String($('Global Config').first().json.test_recipient_email || '').trim();\nconst tpl = $('Pick Templates').first().json[record.mail_round]; // R1 | R2\n\n// สร้าง Message-ID เฉพาะสำหรับใช้อ้างอิง\nconst customMessageId = `<n8n-${Date.now()}-${Math.random().toString(36).substring(2, 9)}@automail.internal>`;\n\nconst att = $('Collect Attachments').first();\n\nconst policyNo = record.policy_no || 'POL-REF';\nconst vars = {\n  customerName: record.resolved_name,\n  policyNo,\n  bookingNo: policyNo,\n  policyExpiry: record.resolved_due_date,\n  insuranceType: record.insurance_type || 'ประกันภัย',\n  roundLabel: record.round_label,\n  monthsAhead: record.months_ahead,\n  daysRemaining: record.days_remaining,\n  driveLinks: att.json.attachment_names,\n  referenceId: customMessageId\n};\n\nconst esc = s => s.replace(/[&<>\"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[ch]));\nconst fill = (text, escape) => text.replace(/\\{\\{\\s*(\\w+)\\s*\\}\\}/g, (_, k) => {\n  const v = String(vars[k] ?? '');\n  return escape ? esc(v) : v;\n});\n\nreturn {\n  json: {\n    ...record,\n    mail_subject: (testTo ? '[TEST] ' : '') + fill(tpl.subject, false),\n    send_to: testTo || record.resolved_email,\n    mail_html: fill(tpl.html, true),\n    generated_message_id: customMessageId,\n    sent_date: new Date().toISOString().split('T')[0]\n  },\n  binary: att.binary || {}\n};"
       },
       "id": "e4f8d21b-3001-4b1a-9876-000000000007",
       "name": "4.1-4.2 Build Mail Template",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1776,
+        2256,
         528
       ]
     },
     {
       "parameters": {
-        "fromEmail": "={{ $('Global Config').item.json.sender_email }}",
+        "fromEmail": "={{ $('Global Config').first().json.sender_email }}",
         "toEmail": "={{ $json.send_to }}",
         "subject": "={{ $json.mail_subject }}",
         "html": "={{ $json.mail_html }}",
         "options": {
           "appendAttribution": false,
-          "fileAttachments": "data, data1"
+          "attachments": "={{ $('Collect Attachments').first().json.attachment_keys }}"
         }
       },
       "id": "e4f8d21b-3001-4b1a-9876-000000000008",
@@ -171,13 +165,13 @@
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
       "position": [
-        2256,
+        2736,
         528
       ],
       "webhookId": "3409c21c-0592-4df5-917e-012d28a08b79",
       "credentials": {
         "smtp": {
-          "id": "tX1RzY0kvRotVojr",
+          "id": "IL9eMFGdu3Z0vA97",
           "name": "SMTP account"
         }
       },
@@ -274,12 +268,12 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [
-        2496,
+        2976,
         448
       ],
       "credentials": {
         "googleApi": {
-          "id": "apU1LNQcR7cMOpnJ",
+          "id": "mqkHhADlTD99e0LW",
           "name": "Google Service Account account"
         }
       }
@@ -375,12 +369,12 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [
-        2496,
+        2976,
         624
       ],
       "credentials": {
         "googleApi": {
-          "id": "apU1LNQcR7cMOpnJ",
+          "id": "mqkHhADlTD99e0LW",
           "name": "Google Service Account account"
         }
       }
@@ -394,7 +388,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2720,
+        3200,
         448
       ]
     },
@@ -407,27 +401,27 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2720,
+        3200,
         624
       ]
     },
     {
       "parameters": {
-        "jsCode": "// 5. สรุปผลการส่ง Auto Email ทั้งหมดในรอบนี้ แยกตามรอบ 6 เดือน และ 3 เดือน\nlet successLogs = [];\nlet failLogs = [];\n\ntry {\n  successLogs = $('Log Success Result').all().map(i => i.json);\n} catch (e) {}\n\ntry {\n  failLogs = $('Log Failure Result').all().map(i => i.json);\n} catch (e) {}\n\nconst totalSuccess = successLogs.length;\nconst totalFailed = failLogs.length;\nconst totalProcessed = totalSuccess + totalFailed;\n\nconst r1Count = successLogs.filter(l => l.mail_round === 'R1').length;\nconst r2Count = successLogs.filter(l => l.mail_round === 'R2').length;\n\nconst nowStr = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });\n\nlet htmlReport = `\n<div style=\"font-family: Arial, sans-serif; line-height: 1.5; color: #222;\">\n  <h2>📊 รายงานผลการส่ง Auto Email ประจำรอบ (รอบ 6 เดือน & 3 เดือน)</h2>\n  <p><strong>เวลาประมวลผล:</strong> ${nowStr}</p>\n  <table border=\"1\" cellpadding=\"8\" cellspacing=\"0\" style=\"border-collapse: collapse; width: 100%; max-width: 600px;\">\n    <tr style=\"background-color: #f2f2f2;\"><th>รายการ</th><th>จำนวน</th></tr>\n    <tr><td>ทั้งหมดที่เข้าเงื่อนไข</td><td><strong>${totalProcessed}</strong></td></tr>\n    <tr style=\"color: #1a73e8;\"><td>รอบ 6 เดือน (R1) ส่งสำเร็จ</td><td><strong>${r1Count}</strong></td></tr>\n    <tr style=\"color: #d93025;\"><td>รอบ 3 เดือน (R2) ส่งสำเร็จ</td><td><strong>${r2Count}</strong></td></tr>\n    <tr style=\"color: green;\"><td>ส่งสำเร็จรวม</td><td><strong>${totalSuccess}</strong></td></tr>\n    <tr style=\"color: red;\"><td>ไม่สำเร็จ</td><td><strong>${totalFailed}</strong></td></tr>\n  </table>\n`;\n\nif (totalFailed > 0) {\n  htmlReport += `\n  <h3 style=\"color: red; margin-top: 20px;\">⚠️ รายการที่ไม่สำเร็จ:</h3>\n  <ul>\n    ${failLogs.map(f => `<li><strong>${f.name}</strong> (${f.email}) [${f.round_label || ''}] - เหตุผล: ${f.reason}</li>`).join('')}\n  </ul>\n  `;\n}\n\nhtmlReport += `\n  <hr style=\"margin-top: 30px; border: none; border-top: 1px solid #ccc;\" />\n  <p style=\"font-size: 12px; color: #666;\">รายงานนี้สร้างขึ้นโดยระบบอัตโนมัติ n8n AutoMail</p>\n</div>\n`;\n\nreturn {\n  json: {\n    total_processed: totalProcessed,\n    total_success: totalSuccess,\n    total_failed: totalFailed,\n    r1_success: r1Count,\n    r2_success: r2Count,\n    report_html: htmlReport,\n    report_subject: `[Auto Mail Report] สรุปผลส่งอีเมล 6M & 3M (สำเร็จ: ${totalSuccess}, ล้มเหลว: ${totalFailed})`\n  }\n};"
+        "jsCode": "// 5. สรุปผลการส่ง Auto Email ทั้งหมดในรอบนี้ แยกตาม R1 / R2\n// ผู้รับจาก config: admin_report_email (คั่นด้วย , ได้) ว่าง = ไม่ส่งรายงาน\nconst S = $('Load Settings').first().json;\nif (!S.report_to) return [];\nlet successLogs = [];\nlet failLogs = [];\n\ntry {\n  successLogs = $('Log Success Result').all().map(i => i.json);\n} catch (e) {}\n\ntry {\n  failLogs = $('Log Failure Result').all().map(i => i.json);\n} catch (e) {}\n\nconst totalSuccess = successLogs.length;\nconst totalFailed = failLogs.length;\nconst totalProcessed = totalSuccess + totalFailed;\n\nconst r1Count = successLogs.filter(l => l.mail_round === 'R1').length;\nconst r2Count = successLogs.filter(l => l.mail_round === 'R2').length;\n\nconst nowStr = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' });\n\nlet htmlReport = `\n<div style=\"font-family: Arial, sans-serif; line-height: 1.5; color: #222;\">\n  <h2>📊 รายงานผลการส่ง Auto Email ประจำรอบ (R1 & R2)</h2>\n  <p><strong>เวลาประมวลผล:</strong> ${nowStr}</p>\n  <table border=\"1\" cellpadding=\"8\" cellspacing=\"0\" style=\"border-collapse: collapse; width: 100%; max-width: 600px;\">\n    <tr style=\"background-color: #f2f2f2;\"><th>รายการ</th><th>จำนวน</th></tr>\n    <tr><td>ทั้งหมดที่เข้าเงื่อนไข</td><td><strong>${totalProcessed}</strong></td></tr>\n    <tr style=\"color: #1a73e8;\"><td>R1 (${S.r1_days} วันก่อนหมดอายุ) ส่งสำเร็จ</td><td><strong>${r1Count}</strong></td></tr>\n    <tr style=\"color: #d93025;\"><td>R2 (${S.r2_days} วันก่อนหมดอายุ) ส่งสำเร็จ</td><td><strong>${r2Count}</strong></td></tr>\n    <tr style=\"color: green;\"><td>ส่งสำเร็จรวม</td><td><strong>${totalSuccess}</strong></td></tr>\n    <tr style=\"color: red;\"><td>ไม่สำเร็จ</td><td><strong>${totalFailed}</strong></td></tr>\n  </table>\n`;\n\nif (totalFailed > 0) {\n  htmlReport += `\n  <h3 style=\"color: red; margin-top: 20px;\">⚠️ รายการที่ไม่สำเร็จ:</h3>\n  <ul>\n    ${failLogs.map(f => `<li><strong>${f.name}</strong> (${f.email}) [${f.round_label || ''}] - เหตุผล: ${f.reason}</li>`).join('')}\n  </ul>\n  `;\n}\n\nhtmlReport += `\n  <hr style=\"margin-top: 30px; border: none; border-top: 1px solid #ccc;\" />\n  <p style=\"font-size: 12px; color: #666;\">รายงานนี้สร้างขึ้นโดยระบบอัตโนมัติ n8n AutoMail</p>\n</div>\n`;\n\nreturn {\n  json: {\n    total_processed: totalProcessed,\n    total_success: totalSuccess,\n    total_failed: totalFailed,\n    r1_success: r1Count,\n    r2_success: r2Count,\n    report_to: S.report_to,\n    report_html: htmlReport,\n    report_subject: `[Auto Mail Report] สรุปผลส่งอีเมล R1 & R2 (สำเร็จ: ${totalSuccess}, ล้มเหลว: ${totalFailed})`\n  }\n};"
       },
       "id": "e4f8d21b-3001-4b1a-9876-000000000013",
       "name": "5. Aggregate Summary Report",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2000,
+        2480,
         208
       ]
     },
     {
       "parameters": {
-        "fromEmail": "={{ $('Global Config').item.json.sender_email }}",
-        "toEmail": "={{ $('Global Config').item.json.admin_report_email }}",
+        "fromEmail": "={{ $('Global Config').first().json.sender_email }}",
+        "toEmail": "={{ $json.report_to }}",
         "subject": "={{ $json.report_subject }}",
         "html": "={{ $json.report_html }}",
         "options": {
@@ -439,88 +433,16 @@
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
       "position": [
-        2224,
+        2704,
         208
       ],
       "webhookId": "54c0d6e7-b87a-450b-abcd-8b0f8c7807b7",
       "credentials": {
         "smtp": {
-          "id": "tX1RzY0kvRotVojr",
+          "id": "IL9eMFGdu3Z0vA97",
           "name": "SMTP account"
         }
       }
-    },
-    {
-      "parameters": {
-        "authentication": "serviceAccount",
-        "operation": "download",
-        "fileId": {
-          "__rl": true,
-          "value": "https://drive.google.com/file/d/158X9CirMwRvt-k6gkvCTVGEhpwHlxST2/view?usp=sharing",
-          "mode": "url"
-        },
-        "options": {
-          "binaryPropertyName": "data"
-        }
-      },
-      "type": "n8n-nodes-base.googleDrive",
-      "typeVersion": 3,
-      "position": [
-        736,
-        224
-      ],
-      "id": "450c201c-a44b-4be3-a434-cae9a59f4dc2",
-      "name": "Download file1",
-      "alwaysOutputData": false,
-      "credentials": {
-        "googleApi": {
-          "id": "apU1LNQcR7cMOpnJ",
-          "name": "Google Service Account account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "authentication": "serviceAccount",
-        "operation": "download",
-        "fileId": {
-          "__rl": true,
-          "value": "https://drive.google.com/file/d/1Fc_gL43UoWiZu2vvIt8Bqb2f9S0Azho6/view?usp=sharing",
-          "mode": "url"
-        },
-        "options": {
-          "binaryPropertyName": "data1"
-        }
-      },
-      "type": "n8n-nodes-base.googleDrive",
-      "typeVersion": 3,
-      "position": [
-        736,
-        384
-      ],
-      "id": "2d3a28ef-9541-481e-b4db-936fe0546b27",
-      "name": "Download file",
-      "credentials": {
-        "googleApi": {
-          "id": "apU1LNQcR7cMOpnJ",
-          "name": "Google Service Account account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "mode": "combine",
-        "combineBy": "combineByPosition",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.merge",
-      "typeVersion": 3.2,
-      "position": [
-        944,
-        224
-      ],
-      "id": "1e105557-c415-4c4e-9fa3-82a817b8e72f",
-      "name": "Merge"
     },
     {
       "parameters": {
@@ -544,13 +466,14 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [
-        288,
-        224
+        736,
+        64
       ],
       "alwaysOutputData": true,
+      "executeOnce": true,
       "credentials": {
         "googleApi": {
-          "id": "apU1LNQcR7cMOpnJ",
+          "id": "mqkHhADlTD99e0LW",
           "name": "Google Service Account account"
         }
       }
@@ -564,8 +487,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        512,
-        224
+        944,
+        64
       ]
     },
     {
@@ -711,12 +634,12 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [
-        2496,
+        2976,
         192
       ],
       "credentials": {
         "googleApi": {
-          "id": "apU1LNQcR7cMOpnJ",
+          "id": "mqkHhADlTD99e0LW",
           "name": "Google Service Account account"
         }
       }
@@ -864,18 +787,151 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.5,
       "position": [
-        2496,
+        2976,
         1008
       ],
       "credentials": {
         "googleApi": {
-          "id": "apU1LNQcR7cMOpnJ",
+          "id": "mqkHhADlTD99e0LW",
           "name": "Google Service Account account"
         }
       }
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "documentId": {
+          "__rl": true,
+          "value": "12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo",
+          "mode": "list",
+          "cachedResultName": "automail_test",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "config",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "name": "Read config",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        288,
+        64
+      ],
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "id": "e67ab8f3-2dad-4771-90be-810337269db0",
+      "credentials": {
+        "googleApi": {
+          "id": "mqkHhADlTD99e0LW",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// อ่านชีต config: SYSTEM (เกณฑ์รอบ R1/R2, ผู้รับรายงาน) และ DRIVE_LINK (Reminder Attachment)\n// ค่าเกณฑ์รอบผิด/ว่าง = หยุดทั้งรอบ ไม่เดาค่า default เพราะเป็นการส่งเมลถึงลูกค้า\nconst sys = {};\nconst driveFiles = [];\nfor (const i of $input.all()) {\n  const r = i.json;\n  const cat = String(r.Category || '').trim().toUpperCase();\n  const key = String(r.Key || '').trim();\n  const value = String(r.Value || '').trim();\n  if (cat === 'SYSTEM') sys[key] = value;\n  if (cat === 'DRIVE_LINK' && value) {\n    const m = value.match(/\\/d\\/([\\w-]{10,})/) || value.match(/[?&]id=([\\w-]{10,})/) || value.match(/^([\\w-]{20,})$/);\n    if (!m) throw new Error(`config DRIVE_LINK \"${key}\": อ่าน file ID จากลิงก์ไม่ได้ (${value})`);\n    driveFiles.push({ name: key, fileId: m[1] });\n  }\n}\n\nconst days = k => {\n  const v = sys[k];\n  if (!/^\\d+$/.test(v || '') || +v < 1) throw new Error(`config SYSTEM ${k} ต้องเป็นจำนวนวันเต็มบวก (ค่าปัจจุบัน: \"${v ?? ''}\")`);\n  return +v;\n};\nconst r1 = days('r1_days_before');\nconst r2 = days('r2_days_before');\nif (r2 >= r1) throw new Error(`config: r2_days_before (${r2}) ต้องน้อยกว่า r1_days_before (${r1})`);\n\nconst reportTo = String(sys.admin_report_email || '').split(',').map(s => s.trim()).filter(Boolean);\n\nreturn [{ json: { r1_days: r1, r2_days: r2, report_to: reportTo.join(', '), drive_files: driveFiles } }];"
+      },
+      "name": "Load Settings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        512,
+        64
+      ],
+      "id": "0eb05601-0d67-437d-b5c7-7f32069933a0"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1 item ต่อ 1 Reminder Attachment; ไม่มีเลย = 1 item ว่าง (ผ่าน IF ไปขั้นถัดไปโดยไม่ดาวน์โหลด)\nconst files = $('Load Settings').first().json.drive_files;\nreturn files.length ? files.map(f => ({ json: f })) : [{ json: { fileId: '' } }];"
+      },
+      "name": "List Attachments",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        736,
+        224
+      ],
+      "id": "da2cede2-9214-4f7b-9e66-23d10cf043ed"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "29620244-d18d-4305-9454-d31cd8de3145",
+              "leftValue": "={{ $json.fileId }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Has Attachments?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        944,
+        224
+      ],
+      "id": "dbf1726b-eb0c-4e5d-ad6f-441cc583632e"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.fileId }}",
+          "mode": "id"
+        },
+        "options": {
+          "binaryPropertyName": "data"
+        }
+      },
+      "name": "Download Attachment",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1152,
+        144
+      ],
+      "id": "b0c73ee4-6d61-4d87-b0b2-23739957581a",
+      "credentials": {
+        "googleApi": {
+          "id": "mqkHhADlTD99e0LW",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// รวมไฟล์ที่ดาวน์โหลดได้เป็น item เดียว (att0, att1, ...) ให้ทุกเมลแนบชุดเดียวกัน\nconst binary = {};\nconst names = [];\n$input.all().forEach(i => {\n  const b = i.binary?.data;\n  if (!b) return;\n  binary['att' + names.length] = b;\n  names.push(b.fileName || i.json.name || `file${names.length + 1}`);\n});\nreturn [{ json: { attachment_keys: Object.keys(binary).join(','), attachment_names: names.join(', ') }, binary }];"
+      },
+      "name": "Collect Attachments",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        224
+      ],
+      "id": "2a316004-d2b7-4f8d-8b84-f083ddfc27df"
     }
   ],
-  "pinData": {},
   "connections": {
     "Schedule Trigger (Daily)": {
       "main": [
@@ -903,7 +959,7 @@
       "main": [
         [
           {
-            "node": "Read Templates",
+            "node": "Read config",
             "type": "main",
             "index": 0
           }
@@ -1044,39 +1100,6 @@
         ]
       ]
     },
-    "Download file1": {
-      "main": [
-        [
-          {
-            "node": "Merge",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Download file": {
-      "main": [
-        [
-          {
-            "node": "Merge",
-            "type": "main",
-            "index": 1
-          }
-        ]
-      ]
-    },
-    "Merge": {
-      "main": [
-        [
-          {
-            "node": "1-2. Google Sheets Read (Service Account)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Read Templates": {
       "main": [
         [
@@ -1092,12 +1115,80 @@
       "main": [
         [
           {
-            "node": "Download file1",
+            "node": "List Attachments",
             "type": "main",
             "index": 0
-          },
+          }
+        ]
+      ]
+    },
+    "Read config": {
+      "main": [
+        [
           {
-            "node": "Download file",
+            "node": "Load Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Settings": {
+      "main": [
+        [
+          {
+            "node": "Read Templates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Attachments": {
+      "main": [
+        [
+          {
+            "node": "Has Attachments?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Attachments?": {
+      "main": [
+        [
+          {
+            "node": "Download Attachment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Collect Attachments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Attachment": {
+      "main": [
+        [
+          {
+            "node": "Collect Attachments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Attachments": {
+      "main": [
+        [
+          {
+            "node": "1-2. Google Sheets Read (Service Account)",
             "type": "main",
             "index": 0
           }
@@ -1105,7 +1196,6 @@
       ]
     }
   },
-  "active": false,
   "settings": {
     "executionOrder": "v1",
     "binaryMode": "separate",
@@ -1114,11 +1204,34 @@
     "callerPolicy": "workflowsFromSameOwner",
     "availableInMCP": false
   },
-  "versionId": "b0bf9890-1c54-4bdf-a0d5-1a7198184e32",
+  "staticData": null,
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "2e633fffb0ea72f35ba674745e8461d60f71e2fc37f19249685deaefdcecb3e2"
   },
-  "nodeGroups": [],
-  "tags": []
+  "pinData": {},
+  "versionId": "717298a8-6a93-46ed-9e6d-1fef4c7b6116",
+  "activeVersionId": null,
+  "versionCounter": 4,
+  "triggerCount": 0,
+  "tags": [],
+  "shared": [
+    {
+      "updatedAt": "2026-11-08T15:13:13.128Z",
+      "createdAt": "2026-11-08T15:13:13.128Z",
+      "role": "workflow:owner",
+      "workflowId": "AutoMailOutbound",
+      "projectId": "JrzUmd4x6l6DrnBi",
+      "project": {
+        "updatedAt": "2026-11-02T13:33:13.573Z",
+        "createdAt": "2026-11-02T13:28:32.182Z",
+        "id": "JrzUmd4x6l6DrnBi",
+        "name": "Chartnayodom Wiboonpanich <baipor2545@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "1f1dd28d-d267-4958-a66b-6436e15dec1c"
+      }
+    }
+  ]
 }

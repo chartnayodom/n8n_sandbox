@@ -26,7 +26,7 @@ const g = require('./googleSheets');
 (async () => {
   // 1. add with only name+email -> no fabricated values; missing expiry is flagged as ข้อมูลไม่ครบ with a reason
   await g.addMasterData({ name: 'บริษัท ก', email: 'hr@a.co' });
-  assert.deepStrictEqual(tabs.Master_Data[0], ['1', 'บริษัท ก', 'hr@a.co', '', '', '', '', 'ข้อมูลไม่ครบ', 'ไม่มีวันหมดอายุ', ...Array(8).fill('')]);
+  assert.deepStrictEqual(tabs.Master_Data[0], ['1', 'บริษัท ก', 'hr@a.co', '', '', '', '', 'ข้อมูลไม่ครบ', 'ไม่มีวันหมดอายุ', ...Array(9).fill('')]); // A:R (R = Current_Insurer)
 
   // 2. duplicate email rejected on add (case-insensitive) and via quick-whitelist
   await assert.rejects(g.addMasterData({ name: 'x', email: 'HR@a.co' }), /มีอยู่แล้ว/);
@@ -42,6 +42,12 @@ const g = require('./googleSheets');
   assert.deepStrictEqual(tabs.Master_Data[0].slice(7, 16), ['ข้อมูลไม่ครบ', 'ไม่มีวันหมดอายุ', ...Array(7).fill('')]);
   await assert.rejects(g.updateMasterData('1', { email: 'hr@b.co' }), /มีอยู่แล้ว/);
   await g.updateMasterData('1', { email: 'HR@A.co' }); // own email, different case -> allowed
+
+  // 4.1 Current_Insurer (R) round-trips and is kept when another field is edited
+  await g.updateMasterData('1', { currentInsurer: 'XYZ' });
+  await g.updateMasterData('1', { notes: 'n2' });
+  assert.strictEqual(tabs.Master_Data[0][17], 'XYZ');
+  assert.strictEqual((await g.getMasterData())[0].currentInsurer, 'XYZ');
 
   // 5. re-forward: no webhook URL / failing webhook -> error and NO log row; ok webhook -> one row, blank Message_ID
   tabs.Email_Logs.push(['LOG-1', 't', '1', 'บริษัท ก', 'hr@a.co', 'R1', 'subj', '<m>', 'Sent', '']);

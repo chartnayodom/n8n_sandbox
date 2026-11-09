@@ -1,13 +1,14 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const cors = require('cors');
 require('dotenv').config();
 
 const {
   isConfigured,
   verifyUserAccess,
-  checkDrivePermission,
+  findAccessUser,
   getConfig,
   saveConfigItem,
   deleteConfigItem,
@@ -16,6 +17,7 @@ const {
   updateMasterData,
   renewMasterData,
   getEmailLogs,
+  getEmailBody,
   addEmailLog,
   reForwardEmail,
   setEmailLogStatus,
@@ -52,8 +54,18 @@ app.get('/api/status', (req, res) => {
 });
 
 // ==========================================
-// A. AUTHENTICATION & TWO-TIER AUTHORIZATION
+// A. AUTHENTICATION & SESSION (สิทธิ์จากแถว USER_ACCESS ในชีต config)
 // ==========================================
+// session อยู่ใน cookie httpOnly (เบราว์เซอร์ส่งให้เองทุก request รวม <img>/<iframe> ไฟล์แนบ)
+// หมดอายุเมื่อไม่มี request ติดกัน 2 ชม. และตรวจชีตซ้ำทุก 5 นาที (ถูกลบสิทธิ์ = ออก, role เปลี่ยน = ใช้ role ใหม่)
+// ponytail: session อยู่ใน memory รีสตาร์ท/deploy ใหม่ = ทุกคน login ใหม่ ย้ายไป store ภายนอกเมื่อรันหลาย instance
+const IDLE_MS = 2 * 60 * 60 * 1000;
+const RECHECK_MS = 5 * 60 * 1000;
+const sessions = new Map(); // sid -> { email, name, role, lastSeen, checkedAt }
+const ADMIN_ONLY = /^\/(config|templates)(\/|$)/; // Settings + Email Template
+
+const getSid = req => (/(?:^|;\s*)sid=([^;]+)/.exec(req.headers.cookie || '') || [])[1];
+const publicUser = s => ({ email: s.email, name: s.name, role: s.role });
 
 app.post('/api/auth/login', async (req, res) => {
   try {
@@ -67,31 +79,58 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(403).json(verification);
     }
 
-    res.json({
-      success: true,
-      user: {
-        email: verification.email,
-        name: verification.name,
-        role: verification.role
-      },
-      token: `jwt_session_${Date.now()}`
-    });
+    const now = Date.now();
+    for (const [id, s] of sessions) if (now - s.lastSeen > IDLE_MS) sessions.delete(id); // กวาด session ที่หมดอายุ
+    const sid = crypto.randomBytes(32).toString('hex');
+    const session = { email: verification.email, name: verification.name, role: verification.role, lastSeen: now, checkedAt: now };
+    sessions.set(sid, session);
+    res.cookie('sid', sid, { httpOnly: true, sameSite: 'strict', secure: req.secure, path: '/' });
+    res.json({ success: true, user: publicUser(session) });
   } catch (err) {
     console.error('Authentication Error:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// Drive Permission Check only
-app.get('/api/auth/check-drive', async (req, res) => {
-  try {
-    const email = req.query.email;
-    if (!email) return res.status(400).json({ error: 'Email parameter required' });
-    const result = await checkDrivePermission(email);
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+// ทุก /api ที่ลงทะเบียนหลังจากนี้ต้องมี session
+app.use('/api', async (req, res, next) => {
+  const sid = getSid(req);
+  const s = sid && sessions.get(sid);
+  const now = Date.now();
+  if (!s || now - s.lastSeen > IDLE_MS) {
+    if (sid) sessions.delete(sid);
+    return res.status(401).json({ error: 'หมดเวลาใช้งาน กรุณาเข้าสู่ระบบใหม่' });
   }
+  if (now - s.checkedAt > RECHECK_MS) {
+    try {
+      const user = await findAccessUser(s.email);
+      if (!user) {
+        sessions.delete(sid);
+        return res.status(401).json({ error: 'บัญชีนี้ถูกยกเลิกสิทธิ์แล้ว' });
+      }
+      Object.assign(s, user, { checkedAt: now });
+    } catch (err) {
+      console.error('Session recheck failed (ใช้สิทธิ์เดิมไปก่อน):', err.message);
+    }
+  }
+  s.lastSeen = now;
+  req.user = s;
+  if (ADMIN_ONLY.test(req.path) && s.role !== 'Admin') {
+    return res.status(403).json({ error: 'เฉพาะ Admin เท่านั้น' });
+  }
+  if (s.role === 'Viewer' && req.method !== 'GET' && !req.path.startsWith('/auth/')) {
+    return res.status(403).json({ error: 'สิทธิ์ Viewer ดูข้อมูลได้อย่างเดียว' });
+  }
+  next();
+});
+
+// ต่ออายุ session (หน้าเว็บเรียกเมื่อผู้ใช้คลิก/พิมพ์) และคืนข้อมูลผู้ใช้ปัจจุบัน
+app.post('/api/auth/ping', (req, res) => res.json({ user: publicUser(req.user) }));
+
+app.post('/api/auth/logout', (req, res) => {
+  sessions.delete(getSid(req));
+  res.clearCookie('sid', { path: '/' });
+  res.json({ success: true });
 });
 
 // ==========================================
@@ -183,6 +222,18 @@ app.post('/api/emails/re-forward', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('Error re-forwarding email:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// เนื้อหาอีเมลสำหรับหน้าอ่านอีเมล (HTML จากผู้ส่งภายนอก หน้าเว็บแสดงใน iframe sandbox เท่านั้น)
+app.get('/api/emails/:id/body', async (req, res) => {
+  try {
+    const log = (await getEmailLogs()).find(l => l.id === req.params.id);
+    if (!log) return res.status(404).json({ error: `ไม่พบรายการ ${req.params.id}` });
+    res.json({ html: await getEmailBody(log._rowIndex) });
+  } catch (err) {
+    console.error('Error fetching email body:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

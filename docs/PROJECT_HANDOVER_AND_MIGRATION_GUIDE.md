@@ -37,7 +37,7 @@ git push origin main
 flowchart TD
     subgraph ClientLayer ["1. Frontend Client (Port 3000)"]
         UI["React 19 + Tailwind v4 + Vite"]
-        LoginUI["A. Login (Two-tier Auth)"]
+        LoginUI["A. Login (USER_ACCESS + Session)"]
         DashUI["1. Dashboard (4 Metric Cards)"]
         InboxUI["2. Inbox & 5. Needs Review"]
         DetailUI["3. Email Detail & Reply Chain"]
@@ -48,7 +48,7 @@ flowchart TD
 
     subgraph ServerLayer ["2. Backend API (Port 5000)"]
         API["Node.js Express Server"]
-        AuthService["Google Drive Permissions Check"]
+        AuthService["Session + Role Check (config sheet)"]
         SheetsService["Google Sheets API v4 Handler"]
         WebhookTrigger["n8n Webhook Caller"]
     end
@@ -71,9 +71,11 @@ flowchart TD
 
 ## ✅ 3. สรุปฟังก์ชั่นที่พัฒนาเสร็จสมบูรณ์แล้ว (Completed Work)
 
-### 3.1 ระบบ Authentication แบบ 2 ชั้น (Two-tier Authorization Gate)
-- **Tier 1:** ตรวจสอบผ่าน Google Drive API (`drive.permissions.list`) ว่าบัญชี Google ของผู้ใช้มีสิทธิ์ใน `SPREADSHEET_ID` หรือไม่
-- **Tier 2:** ตรวจสอบเทียบกับรายชื่อในแผ่นงาน `config` เพื่อดึง Role (`Admin` หรือ `Viewer`) และตรวจสอบสถานะบัญชี
+### 3.1 ระบบ Authentication & Session
+- ตรวจอีเมลกับแถว `USER_ACCESS` ในชีต `config` เพื่อดึง Role (`Admin` / `Staff` / `Viewer`) ไม่มีการเช็คสิทธิ์แชร์ไฟล์บน Drive แล้ว
+- server ออก session เป็น cookie httpOnly ตรวจทุก `/api/*` (ยกเว้น `/api/status`, `/api/auth/login`) หมดอายุเมื่อไม่มีการใช้งาน 2 ชม. และตรวจชีตซ้ำทุก 5 นาที
+- `Admin` เท่านั้นที่เข้า `/api/config` และ `/api/templates` ได้, `Viewer` เรียกได้เฉพาะ GET
+- ยังไม่มีการยืนยันตัวตน (กรอกอีเมลอย่างเดียว) รอเลือกวิธีแทน Google Sign-In
 - มีปุ่มลัดเลือกบัญชีทดสอบที่ได้รับสิทธิ์: `baipor2545@gmail.com` (Owner/Admin) และ `staff@company.com` (Viewer)
 
 ### 3.2 เว็บแอปพลิเคชัน AutoMail Insurance Management ครบ 8 หน้าจอ
@@ -115,13 +117,14 @@ flowchart TD
 **โหมดทดสอบการส่งอีเมล:** ตั้ง `test_recipient_email` ใน node `Global Config` เป็นอีเมลที่ต้องการ ทุกฉบับจะถูกส่งไปอีเมลนั้นแทนอีเมลลูกค้า และ subject จะขึ้นต้นด้วย `[TEST]` (log ใน `Email_Logs` บันทึกอีเมลที่ส่งจริง) ปล่อยว่าง = ส่งถึงลูกค้าจริง
 
 ### 3.4 เวิร์กโฟลว์ n8n ที่บันทึกไว้ในโฟลเดอร์ `workflows/`
-- `c7AnideudYIbfvmK.json` (ชื่อใน n8n: `01 - AutoMail Outbound R1/R2 (v2 Master_Data)` id คงที่ `AutoMailOutbound` import ซ้ำจะอัปเดต workflow เดิม ไม่ชนกับ workflow เวอร์ชันเก่า และ `active: false`):
-  - **[อัปเดตล่าสุด]:** เพิ่มระบบตรวจสอบรอบการส่ง Auto Email ล่วงหน้า 6 เดือน (R1: 91 - 180 วัน) และ 3 เดือน (R2: 1 - 90 วัน) อัตโนมัติ
+- `AutoMailOutbound.json` (ชื่อใน n8n: `01 - AutoMail Outbound R1/R2 (v2 Master_Data)` id คงที่ `AutoMailOutbound` import ซ้ำจะอัปเดต workflow เดิม ไม่ชนกับ workflow เวอร์ชันเก่า และ `active: false`):
+  - อ่านชีต `config` ทุกครั้งที่รัน (node `Read config` → `Load Settings`): รอบ R1 = เหลือ (`r2_days_before`, `r1_days_before`] วัน, R2 = เหลือ (0, `r2_days_before`] วัน (ค่าแนะนำ 180 / 90) ค่าว่างหรือผิด = workflow หยุดและแจ้ง error ลูกค้าที่เข้ามาหลังช่วง R1 ได้แค่ R2
+  - ไฟล์แนบทุกเมลมาจากหมวด `DRIVE_LINK` ในชีต `config` (ดาวน์โหลดด้วย Service Account) ดึงไฟล์ใดไม่ได้ = หยุดทั้งรอบ ไม่ส่งเมลที่เอกสารไม่ครบ ตัวแปร template: `{{driveLinks}}` = ชื่อไฟล์, `{{daysRemaining}}` = จำนวนวันที่เหลือจริง, `{{monthsAhead}}` / `{{roundLabel}}` = round(วันของรอบ / 30)
   - ตรวจสอบ `Mail_R1_Status` และ `Mail_R2_Status` ป้องกันการส่งซ้ำ หากรอบใดเคยส่งแล้ว (`Sent`) จะข้ามทันที
   - สร้างหัวข้อ (Subject) และเนื้อหาอีเมลแยกตามรอบที่ส่ง
   - อัปเดต `Mail_R1_Status` / `Mail_R1_Date` หรือ `Mail_R2_Status` / `Mail_R2_Date` กลับลงชีต `Master_Data` ตามรอบจริง
-  - ปรับปรุงรายงานสรุปผล (Summary Report) ให้แสดงสถิติการส่งสำเร็จแยกตามรอบ 6M และ 3M
-- `02-AutoMail-Inbound-Router.json` (ชื่อใน n8n: `02 - AutoMail Inbound Router (Master_Data → Insurance / Needs Review)` id คงที่ `AutoMailInbound2`, `active: false`) แทนที่ `a14U6Ep5Yxt4eZH1.json` และ workflow 02 เวอร์ชันเก่าทั้งหมด:
+  - รายงานสรุปผลแยกตามรอบ R1 / R2 ส่งถึง `admin_report_email` ในชีต `config` (คั่นด้วย , ได้ ว่าง = ไม่ส่ง)
+- `R3pXov64UiK0AkDL.json` (ชื่อใน n8n: `02 - AutoMail Inbound Router (Master_Data → Insurance / Needs Review)` id คงที่ `R3pXov64UiK0AkDL`, `active: false`) แทนที่ `a14U6Ep5Yxt4eZH1.json` และ workflow 02 เวอร์ชันเก่าทั้งหมด:
   - **Flow A (IMAP Trigger):** อ่านอีเมลใหม่ (UNSEEN, ทำเครื่องหมายอ่านแล้ว) → เทียบอีเมลผู้ส่งกับ `Master_Data`
     - **ส่งต่อบริษัทประกัน** เมื่อผู้ส่งอยู่ใน `Master_Data` **และ** (เป็นการตอบกลับอีเมลที่ระบบส่ง ตรวจจาก In-Reply-To/References เทียบ `Message_ID` ใน `Email_Logs` **หรือ** หัวข้อมี prefix ตาม `subject_prefixes` ในชีต `config`) → ส่งไป `insurance_email` พร้อมไฟล์แนบ ตั้ง Reply-To เป็นผู้ส่งเดิม → บันทึก `Forwarded` (ส่งไม่สำเร็จ = `Failed`)
       - ถ้า `auto_forward` เป็น FALSE → บันทึก `Pending` รอเจ้าหน้าที่กด "ส่งต่ออีกครั้ง" / ถ้ายังไม่ได้ตั้ง `insurance_email` → บันทึก `Failed`
@@ -130,7 +133,8 @@ flowchart TD
       - ต้องตั้ง `IMAP_USER` / `IMAP_PASSWORD` (App Password) ใน `sheets-app/server/.env` และอีเมลต้องยังอยู่ในกล่องจดหมาย (ลบถาวรแล้วจะเปิดไม่ได้)
       - ชุด node อัปโหลด Google Drive (`Split Attachments` → `Upload to Drive` → `Collect Attachments`) ยังอยู่ใน workflow แต่**ไม่ได้เชื่อมต่อ** เป็นทางสำรอง ถ้าจะใช้ต้องมี Shared Drive (Workspace) หรือ credential Google Drive OAuth2 เพราะ Service Account อัปโหลดเข้า My Drive ไม่ได้
     - ข้ามอีเมลที่ผู้ส่งอยู่ใน `ignore_senders` / เป็นอีเมลบริษัทประกัน และอีเมลที่ Message-ID อยู่ใน `Email_Logs` แล้ว
-    - ถ้าตั้ง `review_alert_email` ใน `Global Config` จะส่งอีเมลแจ้งเตือนเมื่อมีรายการ Needs Review
+    - ถ้าตั้ง `review_alert_email` ในชีต `config` (คั่นด้วย , ได้) จะส่งอีเมลแจ้งเตือนเมื่อมีรายการ Needs Review
+    - เมลส่งต่อ (ทั้ง Flow A และ B) ขึ้นต้น "เรียน {insurance_name}" เมื่อตั้งค่าไว้ และหัวสรุปแสดง `Current_Insurer` (Master_Data คอลัมน์ R) ของลูกค้าเมื่อมีค่า
   - **Flow B (Webhook `POST /webhook/re-forward`):** รับคำสั่ง Re-forward จากปุ่มบนเว็บ ส่งเนื้อหาที่เก็บใน `Original_Body` ไปยัง `insurance_email` จาก `config` เสมอ (ไม่ใช้ปลายทางที่มากับ request) เว็บเป็นฝ่ายเพิ่มแถว log เอง ไฟล์แนบเดิมไม่ถูกส่งซ้ำ
   - **โหมดทดสอบ:** ตั้ง `test_forward_email` ใน `Global Config` (และ `Re-forward Config` สำหรับ Flow B) ทุกฉบับจะถูกส่งไปอีเมลนั้นแทนบริษัทประกัน และ subject ขึ้นต้นด้วย `[TEST]` ปล่อยว่าง = ส่งไป `insurance_email` จริง (ปัจจุบันในชีต `config` เป็นค่าตัวอย่าง)
   - ค่าใน `config`: `n8n_webhook_url` ต้องชี้ production URL ของ webhook นี้ (ตอนนี้เป็น `http://localhost:5678/webhook/re-forward` ใช้ได้เมื่อ workflow เปิด Active และเว็บเรียกจากเครื่องที่เข้าถึง n8n ได้)
@@ -207,7 +211,7 @@ npx n8n
 เปิด `http://localhost:5678` จากนั้น Import Workflows จากโฟลเดอร์ `workflows/`:
 - ไปที่หน้า UI n8n > **Workflows** > เมนูมุมขวาบน > **Import from File...**
 - เลือกไฟล์:
-  - `workflows/c7AnideudYIbfvmK.json`
+  - `workflows/AutoMailOutbound.json`
   - `workflows/a14U6Ep5Yxt4eZH1.json`
 
 ### ทางเลือก B: รันผ่าน Docker Compose

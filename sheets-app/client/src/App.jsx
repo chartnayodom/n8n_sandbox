@@ -6,20 +6,143 @@ const CUSTOMER_STATUSES = ['รอดำเนินการ', 'สนใจ / 
 const PREVIEW_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 const PREVIEW_FRAME_TYPES = ['application/pdf', 'text/plain'];
 const CUSTOMER_STATUS_HINTS = { 'ยังไม่สนใจ': ' (หยุดส่งอีเมลรอบ 3 เดือน)', 'ไม่ติดต่อ / ปิดงาน': ' (หยุดส่งอีเมลทุกรอบ)' };
+// Session Timeout: ไม่มีการใช้งาน (คลิก/พิมพ์) 2 ชม. = ออกจากระบบ เตือนก่อน 5 นาที ต่ออายุที่ server ไม่เกินทุก 5 นาที
+// เวลาใช้งานล่าสุดเก็บใน localStorage เพื่อให้ทุกแท็บใช้ค่าเดียวกัน (ใช้แท็บไหนก็ไม่ถูกออก)
+const IDLE_MS = 2 * 60 * 60 * 1000;
+const IDLE_WARN_MS = 5 * 60 * 1000;
+const PING_MS = 5 * 60 * 1000;
+const ACTIVITY_KEY = 'automail_last_activity';
+const ADMIN_TABS = ['templates', 'settings'];
+
+// ---- หน้าอ่านอีเมล (แบบ Outlook: รายการซ้าย + อ่านขวา) ----
+// เนื้อหาอีเมลมาจากผู้ส่งภายนอก จึงแสดงใน iframe sandbox (ไม่รัน script, เข้าถึงหน้าเว็บ/cookie ไม่ได้) + CSP ห้ามโหลดอะไรจากภายนอก
+// รูปจากภายนอกถูกบล็อกจนผู้ใช้กด "แสดงรูปภาพ" (กัน tracking pixel แจ้งผู้ส่งว่าเปิดอ่าน)
+const REMOTE_IMG = /<img\b[^>]*\bsrc\s*=\s*["']?\s*(https?:)?\/\/|url\(\s*["']?\s*(https?:)?\/\//i;
+const MAIL_BODY_LIMIT = 40000; // workflow 02 ตัดเนื้อหาที่ความยาวนี้ (ขีดจำกัดเซลล์ Google Sheets)
+const mailDoc = (html, allowImages) => `<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data:${allowImages ? ' https: http:' : ''}">
+<base target="_blank"><style>body{margin:0;padding:20px 24px;font:14px/1.6 system-ui,-apple-system,'Segoe UI',sans-serif;color:#1e293b;overflow-wrap:anywhere}img{max-width:100%;height:auto}pre{white-space:pre-wrap}</style>
+</head><body>${String(html).replace(/<meta[^>]*http-equiv\s*=\s*["']?refresh[^>]*>/gi, '')}</body></html>`;
+const AVATAR_COLORS = ['bg-slate-900', 'bg-emerald-600', 'bg-amber-600', 'bg-rose-600', 'bg-violet-600', 'bg-cyan-700', 'bg-fuchsia-600', 'bg-teal-600'];
+const avatarColor = s => AVATAR_COLORS[[...String(s || '')].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % AVATAR_COLORS.length];
+const isInbound = item => String(item.mailRound || '').includes('ขาเข้า');
+// ไอคอนเส้น (stroke) จาก mockup "AIA by ใบปอ" — ใช้แทน emoji ในเมนูหลัก
+const ICON = {
+  dashboard: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z',
+  inbox: 'M3 13h5l2 3h4l2-3h5M5 5h14l2 8v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-6z',
+  'needs-review': 'M12 3l9.5 17h-19zM12 10v4M12 17.5v.01',
+  'master-data': 'M16 20v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 20v-1a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8',
+  'follow-up': 'M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z',
+  templates: 'M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8zM14 3v5h5M9 13h6M9 17h6',
+  settings: 'M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6',
+  'activity-logs': 'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 3',
+  mail: 'M4 6h16v12H4zM4 7l8 6 8-6',
+  search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4',
+  logout: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9',
+  refresh: 'M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5',
+  check: 'M20 6L9 17l-5-5'
+};
+const Icon = ({ name, size = 16, className }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}><path d={ICON[name]} /></svg>
+);
+// เวลาในรายการแบบ Gmail: วันนี้ = HH:mm, วันอื่น = วัน เดือนย่อ (timestamp ในชีตเป็น "yyyy-m-d H:mm:ss")
+const listTime = ts => {
+  const m = String(ts || '').match(/^(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})/);
+  if (!m) return ts || '';
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' });
+  if (`${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}` === today) return `${m[4].padStart(2, '0')}:${m[5]}`;
+  return new Date(+m[1], m[2] - 1, +m[3]).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
+};
+
+// ค่าเริ่มต้นของโหมดแก้ไขแบบง่าย (ใช้ตอนสร้างใหม่ และตอนแถวในชีตยังไม่มี HTML_Content)
+const DEFAULT_SIMPLE = {
+  title: 'แจ้งข้อมูลการทำประกันภัย',
+  titleColor: '#2563eb',
+  greeting: 'เรียน คุณ {{customerName}},',
+  messageBody: 'ระบบได้รับข้อมูลการจองทำประกันภัยของท่านเรียบร้อยแล้ว รายละเอียดความคุ้มครองและเอกสารประกอบมีดังต่อไปนี้ หากมีข้อสงสัยหรือต้องการสอบถามเพิ่มเติม สามารถติดต่อเจ้าหน้าที่ได้ตลอดเวลา ขอบคุณค่ะ',
+  showBooking: true,
+  showExpiry: true,
+  showDrive: true,
+  footer: 'AutoMail Insurance Automation System • ติดต่อฝ่ายบริการลูกค้า โทร 02-xxx-xxxx'
+};
 
 export default function App() {
-  // Current User & Auth State
-  const [currentUser, setCurrentUser] = useState(() => {
-    try {
-      const saved = localStorage.getItem('automail_user');
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
+  // Current User & Auth State: undefined = กำลังตรวจ session, null = ยังไม่ login
+  const [currentUser, setCurrentUser] = useState(undefined);
   const [authEmailInput, setAuthEmailInput] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState(null);
+  const isAdmin = currentUser?.role === 'Admin';
+  const canEdit = !!currentUser && currentUser.role !== 'Viewer';
+
+  // Loading overlay: นับ request เขียนข้อมูลที่ยังรอผล (> 0 = แสดง overlay กันกดซ้ำ)
+  const [busyCount, setBusyCount] = useState(0);
+  const [idleWarning, setIdleWarning] = useState(false);
+
+  const endSession = (message) => {
+    setCurrentUser(null);
+    setIdleWarning(false);
+    if (message) setAuthError(message);
+  };
+
+  // ทุก request ไป /api ผ่านตัวนี้: request เขียนข้อมูลแสดง overlay, 401 = session หมด → กลับหน้า login
+  const api = async (url, opts = {}) => {
+    const write = (opts.method || 'GET') !== 'GET' && url !== '/api/auth/ping';
+    if (write) setBusyCount(n => n + 1);
+    try {
+      const res = await fetch(url, opts);
+      if (res.status === 401 && url !== '/api/auth/login') {
+        const data = await res.clone().json().catch(() => ({}));
+        endSession(data.error || 'หมดเวลาใช้งาน กรุณาเข้าสู่ระบบใหม่');
+      }
+      return res;
+    } finally {
+      if (write) setBusyCount(n => n - 1);
+    }
+  };
+
+  // เปิดหน้าเว็บ: ถาม server ว่ายังมี session อยู่ไหม
+  useEffect(() => {
+    fetch('/api/auth/ping', { method: 'POST' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => setCurrentUser(d?.user || null))
+      .catch(() => setCurrentUser(null));
+  }, []);
+
+  // จับการใช้งาน → ต่ออายุ session, ตรวจเวลาว่างทุก 15 วินาที
+  useEffect(() => {
+    if (!currentUser) return;
+    let lastPing = Date.now();
+    const lastActivity = () => Number(localStorage.getItem(ACTIVITY_KEY)) || Date.now();
+    const onActivity = () => {
+      const now = Date.now();
+      localStorage.setItem(ACTIVITY_KEY, String(now));
+      setIdleWarning(false);
+      if (now - lastPing < PING_MS) return;
+      lastPing = now;
+      api('/api/auth/ping', { method: 'POST' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => d && setCurrentUser(u => (u && (u.role !== d.user.role || u.name !== d.user.name) ? d.user : u)))
+        .catch(() => {});
+    };
+    onActivity();
+    const timer = setInterval(() => {
+      const idle = Date.now() - lastActivity();
+      if (idle >= IDLE_MS) {
+        fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+        endSession('หมดเวลาใช้งานเนื่องจากไม่มีการใช้งานเกิน 2 ชั่วโมง กรุณาเข้าสู่ระบบใหม่');
+      } else {
+        setIdleWarning(idle >= IDLE_MS - IDLE_WARN_MS);
+      }
+    }, 15000);
+    window.addEventListener('click', onActivity);
+    window.addEventListener('keydown', onActivity);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('click', onActivity);
+      window.removeEventListener('keydown', onActivity);
+    };
+  }, [currentUser?.email]);
 
   // Navigation Tabs: dashboard | inbox | needs-review | master-data | templates | settings | activity-logs
   const [currentTab, setCurrentTab] = useState('dashboard');
@@ -51,10 +174,28 @@ export default function App() {
   // Inbox status filter
   const [inboxFilter, setInboxFilter] = useState('ALL');
 
+  // เนื้อหาอีเมลที่เปิดอ่าน (โหลดทีละฉบับจาก /api/emails/:id/body)
+  const [mailBody, setMailBody] = useState({ id: null, html: '', loading: false, error: '' });
+  const [showImages, setShowImages] = useState(false);
+  useEffect(() => {
+    const id = selectedEmail?.id;
+    setShowImages(false);
+    if (!id) return;
+    let cancelled = false;
+    setMailBody({ id, html: '', loading: true, error: '' });
+    api(`/api/emails/${encodeURIComponent(id)}/body`)
+      .then(async r => {
+        const d = await r.json().catch(() => ({}));
+        if (!cancelled) setMailBody({ id, html: d.html || '', loading: false, error: r.ok ? '' : d.error || 'โหลดเนื้อหาอีเมลไม่สำเร็จ' });
+      })
+      .catch(err => !cancelled && setMailBody({ id, html: '', loading: false, error: err.message }));
+    return () => { cancelled = true; };
+  }, [selectedEmail?.id]);
+
   // Customer Modal (Add & Edit)
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
-  const emptyCustomerForm = { name: '', email: '', phone: '', type: '', policy: '', dataStatus: 'Valid', customerStatus: '', notes: '', expiry: '' };
+  const emptyCustomerForm = { name: '', email: '', phone: '', type: '', policy: '', currentInsurer: '', dataStatus: 'Valid', customerStatus: '', notes: '', expiry: '' };
   const [customerForm, setCustomerForm] = useState(emptyCustomerForm);
   const [masterFilter, setMasterFilter] = useState('ALL'); // ALL | INCOMPLETE | INVALID
 
@@ -88,20 +229,17 @@ export default function App() {
   });
 
   // Simple Form Fields for users without HTML knowledge
-  const [simpleTemplate, setSimpleTemplate] = useState({
-    title: 'แจ้งข้อมูลการทำประกันภัย',
-    titleColor: '#2563eb',
-    greeting: 'เรียน คุณ {{customerName}},',
-    messageBody: 'ระบบได้รับข้อมูลการจองทำประกันภัยของท่านเรียบร้อยแล้ว รายละเอียดความคุ้มครองและเอกสารประกอบมีดังต่อไปนี้ หากมีข้อสงสัยหรือต้องการสอบถามเพิ่มเติม สามารถติดต่อเจ้าหน้าที่ได้ตลอดเวลา ขอบคุณค่ะ',
-    showBooking: true,
-    showExpiry: true,
-    showDrive: true,
-    footer: 'AutoMail Insurance Automation System • ติดต่อฝ่ายบริการลูกค้า โทร 02-xxx-xxxx'
-  });
+  const [simpleTemplate, setSimpleTemplate] = useState(DEFAULT_SIMPLE);
 
   // New User Access Modal (inside Settings)
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [userForm, setUserForm] = useState({ email: '', name: '', role: 'Viewer', description: '' });
+  const [editingUserEmail, setEditingUserEmail] = useState(null); // null = เพิ่มใหม่, อีเมล = แก้ไขแถวนั้น
+  const openUserModal = (u) => {
+    setEditingUserEmail(u ? u.email : null);
+    setUserForm(u ? { email: u.email, name: u.name || '', role: u.role, description: u.description || '' } : { email: '', name: '', role: 'Viewer', description: '' });
+    setIsUserModalOpen(true);
+  };
 
   // New Drive Link Modal (inside Settings)
   const [isDriveModalOpen, setIsDriveModalOpen] = useState(false);
@@ -118,16 +256,23 @@ export default function App() {
   const fetchAllData = async () => {
     try {
       setRefreshing(true);
+      // config / templates เป็นของ Admin เท่านั้น (server ตอบ 403) role อื่นไม่ต้องดึง
+      const SKIP = 'skip';
       const [dashRes, masterRes, emailRes, tplRes, confRes, logRes, callRes] = await Promise.all([
-        fetch('/api/dashboard').catch(() => null),
-        fetch('/api/master-data').catch(() => null),
-        fetch('/api/emails').catch(() => null),
-        fetch('/api/templates').catch(() => null),
-        fetch('/api/config').catch(() => null),
-        fetch('/api/activity-logs').catch(() => null),
-        fetch('/api/call-logs').catch(() => null)
+        api('/api/dashboard').catch(() => null),
+        api('/api/master-data').catch(() => null),
+        api('/api/emails').catch(() => null),
+        isAdmin ? api('/api/templates').catch(() => null) : SKIP,
+        isAdmin ? api('/api/config').catch(() => null) : SKIP,
+        api('/api/activity-logs').catch(() => null),
+        api('/api/call-logs').catch(() => null)
       ]);
-      setLoadError([dashRes, masterRes, emailRes, tplRes, confRes, logRes, callRes].some(r => !r || !r.ok));
+      setLoadError([dashRes, masterRes, emailRes, tplRes, confRes, logRes, callRes].some(r => r !== SKIP && (!r || !r.ok)));
+      if (!isAdmin) {
+        // ล้างข้อมูลของ Admin คนก่อนที่อาจค้างใน state (login สลับคนบนเครื่องเดียวกัน)
+        setTemplates([]);
+        setConfig({ system: {}, driveLinks: [], users: [] });
+      }
 
       if (dashRes && dashRes.ok) {
         const d = await dashRes.json();
@@ -169,7 +314,12 @@ export default function App() {
     if (currentUser) {
       fetchAllData();
     }
-  }, [currentUser]);
+  }, [currentUser?.email, currentUser?.role]);
+
+  // role ถูกลดสิทธิ์ระหว่างเปิดหน้า Settings/Template อยู่ → กลับหน้าแรก
+  useEffect(() => {
+    if (currentUser && !isAdmin && ADMIN_TABS.includes(currentTab)) setCurrentTab('dashboard');
+  }, [currentUser?.role, currentTab]);
 
   // Handle Google Auth Login
   const handleLogin = async (e) => {
@@ -178,7 +328,7 @@ export default function App() {
     setAuthError(null);
 
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await api('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: authEmailInput.trim() })
@@ -191,7 +341,6 @@ export default function App() {
       }
 
       setCurrentUser(data.user);
-      localStorage.setItem('automail_user', JSON.stringify(data.user));
       showToast(`ยินดีต้อนรับคุณ ${data.user.name} (${data.user.role})`);
     } catch (err) {
       setAuthError('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์: ' + err.message);
@@ -201,16 +350,15 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    setCurrentUser(null);
-    localStorage.removeItem('automail_user');
-    showToast('ออกจากระบบเรียบร้อยแล้ว', 'info');
+    fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+    endSession(null);
   };
 
   // Re-forward Email
   const handleReForward = async (logId) => {
     try {
       setReforwarding(true);
-      const res = await fetch('/api/emails/re-forward', {
+      const res = await api('/api/emails/re-forward', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: logId })
@@ -233,7 +381,7 @@ export default function App() {
   const handleCloseEmail = async (logId) => {
     if (!window.confirm('ปิดรายการนี้โดยไม่ส่งต่อและไม่เพิ่มผู้ส่งเข้า Master Data ใช่หรือไม่?')) return;
     try {
-      const res = await fetch(`/api/emails/${encodeURIComponent(logId)}/close`, { method: 'POST' });
+      const res = await api(`/api/emails/${encodeURIComponent(logId)}/close`, { method: 'POST' });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
         showToast('ปิดรายการเรียบร้อย');
@@ -249,7 +397,7 @@ export default function App() {
   // Quick Whitelist sender from Needs Review
   const handleQuickWhitelist = async (senderEmail, customerName) => {
     try {
-      const res = await fetch('/api/emails/whitelist', {
+      const res = await api('/api/emails/whitelist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: senderEmail, name: customerName })
@@ -270,7 +418,7 @@ export default function App() {
   const handleSaveCustomer = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch(editingCustomer ? `/api/master-data/${editingCustomer.id}` : '/api/master-data', {
+      const res = await api(editingCustomer ? `/api/master-data/${editingCustomer.id}` : '/api/master-data', {
         method: editingCustomer ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(customerForm)
@@ -291,7 +439,7 @@ export default function App() {
   const handleRenew = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch(`/api/master-data/${renewTarget.id}/renew`, {
+      const res = await api(`/api/master-data/${renewTarget.id}/renew`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ expiry: renewExpiry })
@@ -313,7 +461,7 @@ export default function App() {
   const handleSaveTemplate = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch('/api/templates', {
+      const res = await api('/api/templates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(templateForm)
@@ -331,7 +479,7 @@ export default function App() {
   const handleDeleteTemplate = async (id) => {
     if (!window.confirm('คุณแน่ใจหรือไม่ว่าต้องการลบเทมเพลตนี้?')) return;
     try {
-      const res = await fetch(`/api/templates/${id}`, { method: 'DELETE' });
+      const res = await api(`/api/templates/${id}`, { method: 'DELETE' });
       if (res.ok) {
         showToast('ลบเทมเพลตเรียบร้อย');
         fetchAllData();
@@ -343,34 +491,51 @@ export default function App() {
 
   // Config Management (System, Drive links, Users)
   const handleSaveSystemConfig = async () => {
+    // เกณฑ์รอบเดียวกับที่ workflow 01 ตรวจ (ว่างทั้งคู่ = ยังไม่ตั้ง, workflow จะหยุดและแจ้ง error)
+    const r1 = String(config.system.r1_days_before ?? '').trim();
+    const r2 = String(config.system.r2_days_before ?? '').trim();
+    if ((r1 || r2) && !(/^\d+$/.test(r1) && /^\d+$/.test(r2) && +r2 >= 1 && +r2 < +r1)) {
+      showToast('จำนวนวัน R1/R2 ต้องเป็นจำนวนเต็มบวก และ R2 ต้องน้อยกว่า R1 (แท็บ ข้อมูลระบบ)', 'error');
+      return;
+    }
     try {
       const results = await Promise.all([
-        fetch('/api/config', {
+        ...[
+          ['r1_days_before', r1, 'R1: ส่งเมลแจ้งเตือนเมื่อเหลือไม่เกินกี่วันก่อนหมดอายุ'],
+          ['r2_days_before', r2, 'R2: ส่งเมลแจ้งเตือนเมื่อเหลือไม่เกินกี่วันก่อนหมดอายุ'],
+          ['admin_report_email', config.system.admin_report_email || '', 'ผู้รับรายงานสรุปการส่งประจำวัน (คั่นด้วย , ว่าง = ไม่ส่ง)'],
+          ['review_alert_email', config.system.review_alert_email || '', 'ผู้รับแจ้งเตือนเมื่อมีอีเมล Needs Review (คั่นด้วย , ว่าง = ไม่ส่ง)']
+        ].map(([key, value, description]) => api('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ category: 'SYSTEM', key, value, description })
+        })),
+        api('/api/config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ category: 'SYSTEM', key: 'insurance_name', value: config.system.insurance_name, description: 'ชื่อบริษัทประกัน' })
         }),
-        fetch('/api/config', {
+        api('/api/config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ category: 'SYSTEM', key: 'insurance_email', value: config.system.insurance_email, description: 'อีเมลบริษัทประกัน' })
         }),
-        fetch('/api/config', {
+        api('/api/config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ category: 'SYSTEM', key: 'auto_forward', value: String(config.system.auto_forward), description: 'Auto forward status' })
         }),
-        fetch('/api/config', {
+        api('/api/config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ category: 'SYSTEM', key: 'n8n_webhook_url', value: config.system.n8n_webhook_url, description: 'n8n Webhook URL' })
         }),
-        fetch('/api/config', {
+        api('/api/config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ category: 'SYSTEM', key: 'subject_prefixes', value: config.system.subject_prefixes || '', description: 'prefix หัวข้ออีเมลที่ส่งต่อบริษัทประกันได้ (คั่นด้วย ,)' })
         }),
-        fetch('/api/config', {
+        api('/api/config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ category: 'SYSTEM', key: 'attachment_folder_id', value: config.system.attachment_folder_id || '', description: 'ID โฟลเดอร์ Google Drive เก็บไฟล์แนบอีเมลขาเข้า' })
@@ -384,10 +549,16 @@ export default function App() {
     }
   };
 
+  // เพิ่ม/แก้ไขสิทธิ์: server บันทึกแบบ upsert ตามอีเมล (category USER_ACCESS) จึงใช้ endpoint เดียวกัน
   const handleAddUserAccess = async (e) => {
     e.preventDefault();
+    const email = userForm.email.trim().toLowerCase();
+    if (!editingUserEmail && config.users.some(u => u.email.toLowerCase() === email)) {
+      showToast(`${userForm.email} มีในรายชื่ออยู่แล้ว กด "แก้ไข" ที่แถวนั้นแทน`, 'error');
+      return;
+    }
     try {
-      const res = await fetch('/api/config', {
+      const res = await api('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -399,10 +570,14 @@ export default function App() {
         })
       });
       if (res.ok) {
-        showToast(`เพิ่มสิทธิ์ผู้ใช้งาน ${userForm.email} สำเร็จ`);
+        showToast(editingUserEmail
+          ? `แก้ไขสิทธิ์ ${userForm.email} เป็น ${userForm.role} แล้ว (ถ้าผู้ใช้ login อยู่ จะมีผลภายใน 5 นาที)`
+          : `เพิ่มสิทธิ์ผู้ใช้งาน ${userForm.email} สำเร็จ`);
         setIsUserModalOpen(false);
-        setUserForm({ email: '', name: '', role: 'Viewer', description: '' });
         fetchAllData();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error || 'บันทึกสิทธิ์ไม่สำเร็จ', 'error');
       }
     } catch (err) {
       showToast('เกิดข้อผิดพลาด: ' + err.message, 'error');
@@ -412,7 +587,7 @@ export default function App() {
   const handleDeleteUserAccess = async (email) => {
     if (!window.confirm(`คุณต้องการลบสิทธิ์ผู้ใช้ ${email} หรือไม่?`)) return;
     try {
-      const res = await fetch(`/api/config/USER_ACCESS/${encodeURIComponent(email)}`, { method: 'DELETE' });
+      const res = await api(`/api/config/USER_ACCESS/${encodeURIComponent(email)}`, { method: 'DELETE' });
       if (res.ok) {
         showToast('ลบสิทธิ์ผู้ใช้เรียบร้อย');
         fetchAllData();
@@ -425,7 +600,7 @@ export default function App() {
   const handleAddDriveLink = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch('/api/config', {
+      const res = await api('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -449,7 +624,7 @@ export default function App() {
   const handleDeleteDriveLink = async (name) => {
     if (!window.confirm(`ต้องการลบลิงก์ ${name} หรือไม่?`)) return;
     try {
-      const res = await fetch(`/api/config/DRIVE_LINK/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const res = await api(`/api/config/DRIVE_LINK/${encodeURIComponent(name)}`, { method: 'DELETE' });
       if (res.ok) {
         showToast('ลบลิงก์สำเร็จ');
         fetchAllData();
@@ -519,7 +694,7 @@ export default function App() {
     const s = status || '';
     if (s.includes('ปิดงาน')) return 'bg-red-100 text-red-800';
     if (s.includes('ไม่สนใจ')) return 'bg-orange-100 text-orange-800';
-    if (s.includes('นัดหมาย')) return 'bg-blue-100 text-blue-800';
+    if (s.includes('นัดหมาย')) return 'bg-rose-100 text-rose-800';
     if (s.includes('สนใจ')) return 'bg-emerald-100 text-emerald-800';
     return 'bg-slate-100 text-slate-700';
   };
@@ -527,7 +702,7 @@ export default function App() {
     f.due === 'OVERDUE' ? { text: `เลยกำหนด ${f.next}`, cls: 'bg-red-100 text-red-800' }
     : f.due === 'TODAY' ? { text: 'วันนี้', cls: 'bg-amber-100 text-amber-800' }
     : f.due === 'LATER' ? { text: f.next, cls: 'bg-slate-100 text-slate-700' }
-    : f.due === 'NEVER' ? { text: 'ยังไม่เคยโทร', cls: 'bg-blue-100 text-blue-800' }
+    : f.due === 'NEVER' ? { text: 'ยังไม่เคยโทร', cls: 'bg-rose-100 text-rose-800' }
     : { text: '-', cls: 'text-slate-400' };
 
   const openCallForm = f => {
@@ -545,7 +720,7 @@ export default function App() {
     e.preventDefault();
     if (!followSelected) return;
     try {
-      const res = await fetch('/api/call-logs', {
+      const res = await api('/api/call-logs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...callForm, customerId: followSelected.id })
@@ -626,56 +801,35 @@ export default function App() {
 </html>`;
   };
 
+  // อ่านค่ากลับจาก HTML ที่ buildHtmlFromSimple สร้าง (ค่าที่บันทึกในชีต Templates)
+  // คืน null ถ้าโหมดง่ายแสดง HTML นี้ได้ไม่ครบ (HTML เขียนเอง) — ตรวจโดยสร้างกลับแล้วต้องได้ HTML เดิมเป๊ะ
   const extractSimpleFromHtml = (html) => {
-    if (!html) {
-      return {
-        title: 'แจ้งข้อมูลการทำประกันภัย',
-        titleColor: '#2563eb',
-        greeting: 'เรียน คุณ {{customerName}},',
-        messageBody: 'ขอส่งข้อมูลสำหรับการทำประกันภัยเพิ่มเติม รายละเอียดตามเอกสารแนบ',
-        showBooking: true,
-        showExpiry: true,
-        showDrive: true,
-        footer: 'AutoMail Insurance Automation System • ติดต่อฝ่ายบริการลูกค้า'
-      };
-    }
-
-    const titleMatch = html.match(/<h2[^>]*>(.*?)<\/h2>/i);
-    const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : 'แจ้งข้อมูลการทำประกันภัย';
-
-    const colorMatch = html.match(/color:\s*(#[a-fA-F0-9]{3,6})/i);
-    const titleColor = colorMatch ? colorMatch[1] : '#2563eb';
-
-    const greetingMatch = html.match(/<p[^>]*>\s*(เรียน[^<]*?)<\/p>/i);
-    const greeting = greetingMatch ? greetingMatch[1].replace(/<[^>]+>/g, '').trim() : 'เรียน คุณ {{customerName}},';
-
-    const showBooking = html.includes('{{bookingNo}}');
-    const showExpiry = html.includes('{{policyExpiry}}');
-    const showDrive = html.includes('{{driveLinks}}');
-
-    let cleanBody = '';
-    const bodyDivMatch = html.match(/<div[^>]*white-space:\s*pre-line[^>]*>(.*?)<\/div>/i);
-    if (bodyDivMatch) {
-      cleanBody = bodyDivMatch[1].replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').trim();
-    } else {
-      const paragraphs = [...html.matchAll(/<p[^>]*>(.*?)<\/p>/gi)].map(m => m[1].replace(/<[^>]+>/g, '').trim());
-      const filtered = paragraphs.filter(p => !p.startsWith('เรียน') && !p.includes('AutoMail') && !p.includes('<!DOCTYPE'));
-      cleanBody = filtered.join('\n\n') || 'ขอส่งข้อมูลสำหรับการทำประกันภัยเพิ่มเติม รายละเอียดตามเอกสารแนบ';
-    }
-
-    const footerMatch = html.match(/<p[^>]*font-size:\s*1[0-2]px[^>]*>(.*?)<\/p>/i) || html.match(/<hr[^>]*>\s*<p[^>]*>(.*?)<\/p>/i);
-    const footer = footerMatch ? footerMatch[1].replace(/<[^>]+>/g, '').trim() : 'AutoMail Insurance Automation System • ติดต่อฝ่ายบริการลูกค้า';
-
-    return {
-      title,
-      titleColor,
-      greeting,
-      messageBody: cleanBody,
-      showBooking,
-      showExpiry,
-      showDrive,
-      footer
+    const pick = re => (html.match(re) || [])[1] ?? '';
+    const st = {
+      title: pick(/<h2[^>]*>([\s\S]*?)<\/h2>/i),
+      titleColor: pick(/<h2[^>]*color:\s*(#[0-9a-f]{3,6})/i),
+      greeting: pick(/<\/h2>\s*<\/div>\s*<p[^>]*>([\s\S]*?)<\/p>/i),
+      messageBody: pick(/<div[^>]*white-space:\s*pre-line[^>]*>([\s\S]*?)<\/div>/i),
+      showBooking: html.includes('หมายเลขการจอง / กรมธรรม์:</strong>'),
+      showExpiry: html.includes('วันหมดอายุความคุ้มครอง:</strong>'),
+      showDrive: html.includes('เอกสารแนบที่เกี่ยวข้อง:</strong>'),
+      footer: pick(/<hr[^>]*>\s*<p[^>]*>([\s\S]*?)<\/p>/i)
     };
+    return buildHtmlFromSimple(st) === html ? st : null;
+  };
+
+  // เปิดโหมดง่ายพร้อมค่าจาก HTML; ถ้า HTML เป็นแบบเขียนเอง ให้อยู่โหมด HTML เพื่อไม่ให้ถูกเขียนทับ
+  // HTML ว่าง (แถวในชีตยังไม่มี HTML_Content / ลบในโหมด HTML จนหมด) = เริ่มจากค่าเริ่มต้น และใส่ HTML ให้ตรงกับฟอร์ม
+  const openSimpleEditor = (html) => {
+    const parsed = html ? extractSimpleFromHtml(html) : DEFAULT_SIMPLE;
+    if (!parsed) {
+      setTemplateEditorMode('html');
+      showToast('เทมเพลตนี้เป็น HTML ที่เขียนเอง แก้แบบง่ายไม่ได้ — เปิดในโหมด HTML แทน', 'info');
+      return;
+    }
+    if (!html) setTemplateForm(prev => ({ ...prev, htmlContent: buildHtmlFromSimple(DEFAULT_SIMPLE) }));
+    setSimpleTemplate(parsed);
+    setTemplateEditorMode('simple');
   };
 
   const handleSimpleChange = (field, value) => {
@@ -688,18 +842,7 @@ export default function App() {
   };
 
   const templatePresets = [
-    {
-      name: 'แจ้งข้อมูลทำประกัน',
-      title: 'แจ้งข้อมูลการทำประกันภัย',
-      titleColor: '#2563eb',
-      greeting: 'เรียน คุณ {{customerName}},',
-      subject: 'ขอข้อมูลเพื่อดำเนินการของทำประกัน [{{bookingNo}}]',
-      messageBody: 'ระบบได้รับข้อมูลการจองทำประกันภัยของท่านเรียบร้อยแล้ว รายละเอียดความคุ้มครองและเอกสารประกอบมีดังต่อไปนี้ หากมีข้อสงสัยหรือต้องการสอบถามเพิ่มเติม สามารถติดต่อเจ้าหน้าที่ได้ตลอดเวลา ขอบคุณค่ะ',
-      showBooking: true,
-      showExpiry: true,
-      showDrive: true,
-      footer: 'AutoMail Insurance Automation System • ติดต่อฝ่ายบริการลูกค้า โทร 02-xxx-xxxx'
-    },
+    { ...DEFAULT_SIMPLE, name: 'แจ้งข้อมูลทำประกัน', subject: 'ขอข้อมูลเพื่อดำเนินการของทำประกัน [{{bookingNo}}]' },
     {
       name: 'ขอบคุณและยืนยันรับเอกสาร',
       title: 'ขอบคุณที่ไว้วางใจทำประกันภัยกับเรา',
@@ -739,6 +882,9 @@ export default function App() {
   ];
 
   const applyTemplatePreset = (preset) => {
+    const html = templateForm.htmlContent;
+    if (html && !extractSimpleFromHtml(html) && !window.confirm('HTML ที่เขียนเองของเทมเพลตนี้จะถูกแทนที่ด้วยแม่แบบ ต้องการดำเนินการต่อหรือไม่?')) return;
+    setTemplateEditorMode('simple');
     setSimpleTemplate({
       title: preset.title,
       titleColor: preset.titleColor,
@@ -772,55 +918,231 @@ export default function App() {
     showToast(`แทรกตัวแปร ${ph} เรียบร้อย`);
   };
 
+  // Loading overlay ระหว่างรอผล API ของปุ่ม action (กันกดซ้ำ)
+  const spinner = <span aria-hidden="true" className="w-6 h-6 border-[3px] border-rose-600 border-t-transparent rounded-full animate-spin motion-reduce:animate-none" />;
+  const loadingOverlay = (message) => (
+    <div role="status" aria-live="polite" className="fixed inset-0 z-[100] bg-slate-900/50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl px-6 py-5 shadow-xl flex items-center gap-3 text-sm font-semibold text-slate-700">
+        {spinner}
+        <span>{message}</span>
+      </div>
+    </div>
+  );
+  const busyOverlay = busyCount > 0 && loadingOverlay('กำลังดำเนินการ กรุณารอสักครู่...');
+
+  // ---- กล่องอีเมลแบบ Outlook: รายการซ้าย + อ่านขวา (จอเล็กแสดงทีละฝั่ง) ใช้ทั้งหน้า Inbox และ Needs Review ----
+  const statusBadge = s => (isForwarded(s) ? 'badge-sent' : s === 'Needs Review' ? 'badge-review' : s === 'Failed' ? 'badge-failed' : 'badge-pending');
+  const openEmail = selectedEmail && (emails.find(e => e.id === selectedEmail.id) || selectedEmail); // ใช้สถานะล่าสุดหลังรีเฟรช
+  const mailbox = (list, emptyText) => {
+    const m = openEmail;
+    const items = [...list].reverse(); // ชีตเรียงเก่า → ใหม่ แสดงใหม่สุดก่อน
+    const nameOf = item => item.customerName || item.recipientEmail || '(ไม่ทราบชื่อ)';
+    const bodyReady = m && mailBody.id === m.id && !mailBody.loading;
+    const blockedImages = bodyReady && !showImages && REMOTE_IMG.test(mailBody.html);
+    return (
+      <div className="flex-1 min-h-0 flex bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        <ul aria-label="รายการอีเมล" className={`${m ? 'hidden lg:block' : 'block'} w-full lg:w-[360px] shrink-0 lg:border-r border-slate-200 overflow-y-auto divide-y divide-slate-100`}>
+          {items.length === 0 && <li className="p-8 text-center text-xs text-slate-500">{emptyText}</li>}
+          {items.map(item => {
+            const active = m?.id === item.id;
+            const name = nameOf(item);
+            return (
+              <li key={item.id || item._rowIndex}>
+                <button
+                  onClick={() => setSelectedEmail(item)}
+                  aria-current={active || undefined}
+                  className={`w-full text-left pl-3 pr-4 py-3 flex gap-3 border-l-4 cursor-pointer transition-colors ${active ? 'bg-rose-50 border-rose-600' : 'border-transparent hover:bg-slate-50'}`}
+                >
+                  <span aria-hidden="true" className={`w-9 h-9 rounded-full ${avatarColor(item.recipientEmail)} text-white font-bold text-sm flex items-center justify-center shrink-0`}>
+                    {name[0].toUpperCase()}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-baseline justify-between gap-2">
+                      <span className={`text-[13px] truncate ${isNeedsReview(item) ? 'font-bold text-slate-900' : 'font-semibold text-slate-700'}`}>{name}</span>
+                      <span className="text-[11px] text-slate-500 shrink-0">{listTime(item.timestamp)}</span>
+                    </span>
+                    <span className="block text-xs text-slate-800 truncate">{item.subject || '(ไม่มีหัวข้อ)'}</span>
+                    <span className="flex items-center gap-1.5 mt-1 min-w-0">
+                      <span className={`${statusBadge(item.status)} px-1.5 rounded text-[10px] font-bold shrink-0`}>{item.status || '-'}</span>
+                      {(item.attachments || []).length > 0 && <span className="text-[11px] text-slate-500 shrink-0" title="มีไฟล์แนบ">📎 {item.attachments.length}</span>}
+                      <span className="text-[11px] text-slate-500 truncate">{item.errorDetail || item.mailRound}</span>
+                    </span>
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+
+        <section aria-label="อ่านอีเมล" className={`${m ? 'flex' : 'hidden lg:flex'} flex-1 min-w-0 flex-col`}>
+          {!m ? (
+            <div className="flex-1 flex flex-col items-center justify-center gap-2 text-slate-400">
+              <span className="text-4xl" aria-hidden="true">✉️</span>
+              <span className="text-sm">เลือกอีเมลจากรายการเพื่ออ่าน</span>
+            </div>
+          ) : (
+            <>
+              <div className="px-6 pt-4 pb-3 border-b border-slate-200 space-y-3">
+                <div className="flex items-center gap-2 flex-wrap text-xs">
+                  <button onClick={() => setSelectedEmail(null)} className="lg:hidden px-3 py-1.5 border border-slate-200 rounded-lg font-semibold text-slate-700 cursor-pointer">← กลับ</button>
+                  <div className="flex-1" />
+                  {canEdit && isNeedsReview(m) && !inMaster(m.recipientEmail) && (
+                    <button onClick={() => handleQuickWhitelist(m.recipientEmail, m.customerName)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold cursor-pointer">+ เพิ่มผู้ส่งเข้า Master Data</button>
+                  )}
+                  {canEdit && isNeedsReview(m) && (
+                    <button onClick={() => handleCloseEmail(m.id)} className="px-3 py-1.5 border border-slate-200 text-slate-700 hover:bg-slate-50 rounded-lg font-semibold cursor-pointer">ปิดรายการ</button>
+                  )}
+                  {canEdit && (
+                    <button onClick={() => handleReForward(m.id)} disabled={reforwarding} className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold cursor-pointer disabled:opacity-50">
+                      {reforwarding ? 'กำลังส่งต่อ...' : 'ส่งต่อบริษัทประกัน'}
+                    </button>
+                  )}
+                  <button onClick={() => setSelectedEmail(null)} aria-label="ปิดหน้าอ่านอีเมล" className="hidden lg:flex w-8 h-8 items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer">✕</button>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <h3 className="flex-1 min-w-0 text-lg font-bold text-slate-900 break-words">{m.subject || '(ไม่มีหัวข้อ)'}</h3>
+                  <span className={`${statusBadge(m.status)} px-2.5 py-0.5 rounded-full text-[11px] font-bold shrink-0 mt-1`}>{m.status || '-'}</span>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <span aria-hidden="true" className={`w-10 h-10 rounded-full ${avatarColor(m.recipientEmail)} text-white font-bold flex items-center justify-center shrink-0`}>
+                    {nameOf(m)[0].toUpperCase()}
+                  </span>
+                  <div className="min-w-0 flex-1 text-xs">
+                    <div className="truncate">
+                      <span className="font-bold text-sm text-slate-900">{nameOf(m)}</span>{' '}
+                      <span className="text-slate-500">&lt;{m.recipientEmail || '-'}&gt;</span>
+                    </div>
+                    <div className="text-slate-500 truncate">{isInbound(m) ? 'ผู้ส่ง · อีเมลขาเข้า' : `ส่งถึงลูกค้า · ${m.mailRound || '-'}`}</div>
+                  </div>
+                  <div className="text-xs text-slate-500 shrink-0">{m.timestamp}</div>
+                </div>
+
+                {m.errorDetail && (
+                  <div className="text-xs bg-amber-50 border border-amber-200 text-amber-900 rounded-lg px-3 py-2">เหตุผล: {m.errorDetail}</div>
+                )}
+
+                {(m.attachments || []).length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {m.attachments.map((file, index) => (
+                      <div key={file.id || `${file.name}-${index}`} className="flex items-center gap-2 border border-slate-200 rounded-lg pl-3 pr-1 py-1 text-xs max-w-full">
+                        <span aria-hidden="true">📎</span>
+                        <span className="min-w-0">
+                          <span className="block font-semibold text-slate-800 truncate max-w-[220px]">{file.name}</span>
+                          <span className="block text-[10px] text-slate-500">{file.mimeType}{file.size ? ` • ${file.size}` : ''}</span>
+                        </span>
+                        <button onClick={() => setPreviewFile({ ...file, url: attachmentUrl(m, file, index) })} className="px-2 py-1 text-rose-700 hover:bg-rose-50 rounded font-semibold cursor-pointer">ดู</button>
+                        <a href={`${attachmentUrl(m, file, index)}?download=1`} className="px-2 py-1 text-slate-700 hover:bg-slate-100 rounded font-semibold">ดาวน์โหลด</a>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <details className="text-xs">
+                  <summary className="cursor-pointer text-slate-500 hover:text-slate-700">ข้อมูลระบบ</summary>
+                  <dl className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1.5 mt-2">
+                    {[['Log ID', m.id], ['Customer ID', m.customerId], ['รอบการส่ง', m.mailRound], ['Message ID', m.messageId]].map(([label, value]) => (
+                      <div key={label} className="min-w-0">
+                        <dt className="text-slate-500">{label}</dt>
+                        <dd className="text-slate-800 font-mono break-all">{value || '-'}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </details>
+              </div>
+
+              {blockedImages && (
+                <div className="px-6 py-2 bg-slate-50 border-b border-slate-200 text-xs text-slate-600 flex items-center gap-3">
+                  <span className="flex-1">บล็อกรูปภาพจากภายนอกไว้ เพื่อไม่ให้ผู้ส่งรู้ว่าเปิดอ่านอีเมลนี้แล้ว</span>
+                  <button onClick={() => setShowImages(true)} className="px-3 py-1 border border-slate-300 bg-white hover:bg-slate-100 rounded-lg font-semibold cursor-pointer">แสดงรูปภาพ</button>
+                </div>
+              )}
+              {bodyReady && mailBody.html.length >= MAIL_BODY_LIMIT && (
+                <div className="px-6 py-1.5 bg-amber-50 border-b border-amber-200 text-[11px] text-amber-900">เนื้อหาถูกตัดที่ 40,000 ตัวอักษร (ขีดจำกัดเซลล์ Google Sheets) ส่วนท้ายอาจแสดงไม่ครบ</div>
+              )}
+
+              <div className="flex-1 min-h-0 flex">
+                {!bodyReady ? (
+                  <div role="status" className="flex-1 flex items-center justify-center gap-3 text-sm text-slate-500">{spinner} กำลังโหลดเนื้อหาอีเมล...</div>
+                ) : mailBody.error ? (
+                  <div className="flex-1 flex items-center justify-center text-sm text-red-600 p-6 text-center">{mailBody.error}</div>
+                ) : !mailBody.html ? (
+                  <div className="flex-1 flex items-center justify-center text-sm text-slate-500">ไม่มีเนื้อหาอีเมลบันทึกไว้ในชีต</div>
+                ) : (
+                  <iframe
+                    key={`${m.id}-${showImages}`}
+                    title={`เนื้อหาอีเมล: ${m.subject || ''}`}
+                    sandbox="allow-popups allow-popups-to-escape-sandbox"
+                    srcDoc={mailDoc(mailBody.html, showImages)}
+                    className="flex-1 w-full border-0 bg-white"
+                  />
+                )}
+              </div>
+            </>
+          )}
+        </section>
+      </div>
+    );
+  };
+
+  // ==========================================
+  // RENDER: CHECKING SESSION
+  // ==========================================
+  if (currentUser === undefined) {
+    return <div className="min-h-screen bg-rose-50">{loadingOverlay('กำลังตรวจสอบการเข้าสู่ระบบ...')}</div>;
+  }
+
   // ==========================================
   // RENDER: LOGIN SCREEN (Page A)
   // ==========================================
   if (!currentUser) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900 flex items-center justify-center p-4">
-        <div className="max-w-4xl w-full grid grid-cols-1 md:grid-cols-2 bg-white rounded-3xl shadow-2xl overflow-hidden border border-slate-100">
+      <div className="min-h-screen bg-rose-50 flex items-center justify-center p-4">
+        {busyOverlay}
+        <div className="max-w-4xl w-full grid grid-cols-1 md:grid-cols-2 bg-white rounded-3xl shadow-[0_20px_60px_rgba(225,29,72,.12)] overflow-hidden">
           {/* Left Branding Hero */}
-          <div className="bg-gradient-to-tr from-blue-700 via-blue-600 to-indigo-600 p-10 text-white flex flex-col justify-between relative overflow-hidden">
+          <div className="bg-rose-600 p-10 text-white flex flex-col justify-between relative overflow-hidden">
             <div className="relative z-10">
               <div className="w-14 h-14 bg-white/10 backdrop-blur-md rounded-2xl flex items-center justify-center mb-6 border border-white/20 shadow-inner">
                 <span className="text-3xl">✉️</span>
               </div>
-              <h1 className="text-3xl font-extrabold tracking-tight mb-2">AutoMail Insurance</h1>
-              <p className="text-blue-100 font-medium text-sm leading-relaxed mb-6">
+              <h1 className="font-display text-3xl font-bold mb-2">AutoMail Insurance</h1>
+              <p className="text-rose-100 font-medium text-sm leading-relaxed mb-6">
                 Insurance Email Automation & Routing System<br />
                 ระบบตรวจสอบอีเมลจาก Master Data และส่งต่อไปยังบริษัทประกันภัยอัตโนมัติ
               </p>
 
-              <div className="space-y-3 pt-4 border-t border-white/15 text-xs text-blue-50">
+              <div className="space-y-3 pt-4 border-t border-white/15 text-xs text-rose-50">
                 <div className="flex items-center gap-2.5">
-                  <span className="w-5 h-5 rounded-full bg-blue-500/40 flex items-center justify-center font-bold">⚡</span>
+                  <span className="w-5 h-5 rounded-full bg-rose-500/40 flex items-center justify-center font-bold">⚡</span>
                   <span>ตรวจจับอีเมลเข้าอัตโนมัติผ่าน IMAP Trigger</span>
                 </div>
                 <div className="flex items-center gap-2.5">
-                  <span className="w-5 h-5 rounded-full bg-blue-500/40 flex items-center justify-center font-bold">🛡️</span>
+                  <span className="w-5 h-5 rounded-full bg-rose-500/40 flex items-center justify-center font-bold">🛡️</span>
                   <span>ตรวจสอบสิทธิ์ Whitelist กับ Master Data</span>
                 </div>
                 <div className="flex items-center gap-2.5">
-                  <span className="w-5 h-5 rounded-full bg-blue-500/40 flex items-center justify-center font-bold">✈️</span>
+                  <span className="w-5 h-5 rounded-full bg-rose-500/40 flex items-center justify-center font-bold">✈️</span>
                   <span>ส่งต่อข้อมูลและไฟล์แนบไปยังบริษัทประกันทันที</span>
                 </div>
               </div>
             </div>
 
-            <div className="relative z-10 pt-8 text-[11px] text-blue-200">
-              🔒 Two-tier Authorization: Google Drive API & Config Whitelist
+            <div className="relative z-10 pt-8 text-[11px] text-rose-200">
+              🔒 สิทธิ์เข้าใช้งานตามรายชื่อ User Access ในชีต config
             </div>
           </div>
 
           {/* Right Login Action Card */}
           <div className="p-10 flex flex-col justify-center">
             <div className="mb-6">
-              <span className="text-xs font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-2.5 py-1 rounded-md">
+              <span className="text-xs font-bold uppercase tracking-wider text-rose-600 bg-rose-50 px-2.5 py-1 rounded-md">
                 Management Portal
               </span>
               <h2 className="text-2xl font-bold text-slate-800 mt-2">เข้าสู่ระบบ</h2>
               <p className="text-xs text-slate-500 mt-1">
-                ลงชื่อเข้าใช้ด้วยบัญชี Google ที่ได้รับสิทธิ์เข้าถึง Google Spreadsheet
+                ลงชื่อเข้าใช้ด้วยอีเมลที่ Admin เพิ่มไว้ในรายชื่อ User Access
               </p>
             </div>
 
@@ -828,7 +1150,7 @@ export default function App() {
               <div className="mb-5 p-3.5 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-start gap-2.5">
                 <span className="text-base">⚠️</span>
                 <div>
-                  <div className="font-bold">เข้าสู่ระบบไม่สำเร็จ</div>
+                  <div className="font-bold">แจ้งเตือนการเข้าสู่ระบบ</div>
                   <div className="text-[11px] mt-0.5">{authError}</div>
                 </div>
               </div>
@@ -837,7 +1159,7 @@ export default function App() {
             <form onSubmit={handleLogin} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Google Account Email
+                  อีเมลเจ้าหน้าที่
                 </label>
                 <input
                   type="email"
@@ -845,7 +1167,7 @@ export default function App() {
                   value={authEmailInput}
                   onChange={(e) => setAuthEmailInput(e.target.value)}
                   placeholder="name@gmail.com หรือ email บริษัท"
-                  className="w-full px-3.5 py-2.5 text-xs border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all shadow-xs"
+                  className="w-full px-3.5 py-2.5 text-xs border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 focus:outline-none transition-all shadow-xs"
                 />
               </div>
 
@@ -853,13 +1175,13 @@ export default function App() {
                 <button
                   type="submit"
                   disabled={authLoading}
-                  className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-blue-500/20 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-70"
+                  className="w-full py-3 px-4 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-rose-500/20 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-70"
                 >
                   {authLoading ? (
-                    <span>กำลังตรวจสอบสิทธิ์ Drive & Config...</span>
+                    <span>กำลังตรวจสอบสิทธิ์...</span>
                   ) : (
                     <>
-                      <span>เข้าสู่ระบบด้วย Google Authentication</span>
+                      <span>เข้าสู่ระบบ</span>
                       <span>→</span>
                     </>
                   )}
@@ -869,7 +1191,7 @@ export default function App() {
 
             <div className="mt-8 pt-6 border-t border-slate-100 text-center">
               <span className="text-[11px] text-slate-400">
-                ระบบรักษาความปลอดภัยแบบ 2 ชั้น (Drive API + Sheet Config)
+                ออกจากระบบอัตโนมัติเมื่อไม่มีการใช้งานเกิน 2 ชั่วโมง
               </span>
             </div>
           </div>
@@ -882,166 +1204,123 @@ export default function App() {
   // RENDER: MAIN APPLICATION (Logged In)
   // ==========================================
   return (
-    <div className="flex min-h-screen bg-slate-50 font-sans text-slate-800">
+    <div className="flex min-h-screen bg-rose-50 font-sans text-slate-800">
+      {busyOverlay}
+
+      {/* เตือนก่อน Session Timeout 5 นาที (คลิกที่ไหนก็ได้ = ใช้งานต่อ) */}
+      {idleWarning && (
+        <div role="alert" className="fixed top-4 left-1/2 -translate-x-1/2 z-[90] max-w-[calc(100%-2rem)] bg-amber-50 border border-amber-300 text-amber-900 rounded-xl shadow-lg px-4 py-3 text-xs flex items-center gap-3">
+          <span>ไม่มีการใช้งานเกือบ 2 ชั่วโมง ระบบจะออกจากระบบอัตโนมัติภายใน 5 นาที</span>
+          <button className="shrink-0 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold cursor-pointer">ใช้งานต่อ</button>
+        </div>
+      )}
 
       {/* TOAST NOTIFICATION */}
       {toast && (
         <div className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-xl shadow-xl text-xs font-medium flex items-center gap-2.5 transition-all transform animate-bounce ${
           toast.type === 'error' ? 'bg-red-600 text-white' : 'bg-slate-900 text-white'
         }`}>
-          <span>{toast.type === 'error' ? '⚠️' : '✅'}</span>
+          <span>{{ error: '⚠️', info: 'ℹ️' }[toast.type] || '✅'}</span>
           <span>{toast.msg}</span>
         </div>
       )}
 
       {/* LEFT SIDEBAR NAVIGATION */}
-      <aside className="w-64 bg-slate-900 text-slate-300 flex flex-col justify-between border-r border-slate-800 shrink-0">
-        <div>
+      <aside className="w-72 shrink-0 sticky top-0 h-screen p-[18px] pr-0">
+        <div className="h-full overflow-y-auto bg-white rounded-[30px] px-4 py-[22px] flex flex-col gap-6">
           {/* Brand Header */}
-          <div className="p-5 flex items-center gap-3 border-b border-slate-800/80">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white shadow-md">
-              <span className="text-xl">✉️</span>
+          <div className="flex items-center gap-3 px-2">
+            <div className="w-[46px] h-[46px] rounded-2xl bg-rose-600 flex items-center justify-center text-white -rotate-[8deg] shadow-[0_8px_18px_rgba(225,29,72,.35)] shrink-0">
+              <Icon name="mail" size={24} />
             </div>
-            <div>
-              <div className="font-bold text-white text-sm tracking-tight leading-none">AutoMail Insurance</div>
-              <div className="text-[10px] text-slate-400 mt-1">Management Portal</div>
+            <div className="leading-tight">
+              <div className="font-display font-bold text-[21px] text-slate-900">Auto<span className="text-rose-600">Mail</span></div>
+              <div className="text-xs text-slate-500">Insurance Portal</div>
             </div>
           </div>
 
           {/* Navigation Links */}
-          <nav className="p-3 space-y-1 text-xs font-medium">
-            <button
-              onClick={() => setCurrentTab('dashboard')}
-              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
-                currentTab === 'dashboard' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:bg-slate-800/60 hover:text-white'
-              }`}
-            >
-              <span className="text-base">📊</span>
-              <span>หน้าแรก (Dashboard)</span>
-            </button>
-
-            <button
-              onClick={() => setCurrentTab('inbox')}
-              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
-                currentTab === 'inbox' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:bg-slate-800/60 hover:text-white'
-              }`}
-            >
-              <div className="flex items-center gap-3">
-                <span className="text-base">📥</span>
-                <span>รายการอีเมล (Inbox)</span>
-              </div>
-              <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full font-bold">
-                {emails.length}
-              </span>
-            </button>
-
-            <button
-              onClick={() => setCurrentTab('needs-review')}
-              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
-                currentTab === 'needs-review' ? 'bg-amber-600 text-white shadow-sm' : 'text-slate-400 hover:bg-slate-800/60 hover:text-white'
-              }`}
-            >
-              <div className="flex items-center gap-3">
-                <span className="text-base">⚠️</span>
-                <span>Needs Review</span>
-              </div>
-              {needsReviewEmails.length > 0 && (
-                <span className="text-[10px] bg-amber-500/20 text-amber-400 px-2 py-0.5 rounded-full font-bold">
-                  {needsReviewEmails.length}
-                </span>
-              )}
-            </button>
-
-            <button
-              onClick={() => setCurrentTab('master-data')}
-              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
-                currentTab === 'master-data' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:bg-slate-800/60 hover:text-white'
-              }`}
-            >
-              <span className="text-base">👥</span>
-              <span>Master Data (ลูกค้า)</span>
-            </button>
-
-            <button
-              onClick={() => setCurrentTab('follow-up')}
-              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
-                currentTab === 'follow-up' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:bg-slate-800/60 hover:text-white'
-              }`}
-            >
-              <span className="text-base">📞</span>
-              <span className="flex-1 text-left">ติดตามลูกค้า</span>
-              {followCounts.TODAY + followCounts.OVERDUE > 0 && (
-                <span className="bg-amber-400 text-amber-950 text-[10px] font-bold px-1.5 rounded-full">{followCounts.TODAY + followCounts.OVERDUE}</span>
-              )}
-            </button>
-
-            <button
-              onClick={() => setCurrentTab('templates')}
-              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
-                currentTab === 'templates' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:bg-slate-800/60 hover:text-white'
-              }`}
-            >
-              <span className="text-base">📝</span>
-              <span>เทมเพลตอีเมล (Template)</span>
-            </button>
-
-            <button
-              onClick={() => setCurrentTab('settings')}
-              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
-                currentTab === 'settings' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:bg-slate-800/60 hover:text-white'
-              }`}
-            >
-              <span className="text-base">⚙️</span>
-              <span>ตั้งค่าระบบ (Settings)</span>
-            </button>
-
-            <button
-              onClick={() => setCurrentTab('activity-logs')}
-              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
-                currentTab === 'activity-logs' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:bg-slate-800/60 hover:text-white'
-              }`}
-            >
-              <span className="text-base">🕒</span>
-              <span>ประวัติการทำงาน</span>
-            </button>
+          <nav aria-label="เมนูหลัก" className="flex flex-col gap-1 text-sm font-medium">
+            {[
+              { key: 'dashboard', label: 'หน้าแรก (Dashboard)' },
+              { key: 'inbox', label: 'รายการอีเมล (Inbox)', count: emails.length },
+              { key: 'needs-review', label: 'Needs Review', count: needsReviewEmails.length, hot: true },
+              { key: 'master-data', label: 'Master Data (ลูกค้า)' },
+              { key: 'follow-up', label: 'ติดตามลูกค้า', count: followCounts.TODAY + followCounts.OVERDUE, hot: true },
+              { key: 'templates', label: 'เทมเพลตอีเมล (Template)', admin: true },
+              { key: 'settings', label: 'ตั้งค่าระบบ (Settings)', admin: true },
+              { key: 'activity-logs', label: 'ประวัติการทำงาน' }
+            ].filter(n => !n.admin || isAdmin).map(n => {
+              const on = currentTab === n.key;
+              return (
+                <button
+                  key={n.key}
+                  onClick={() => setCurrentTab(n.key)}
+                  aria-current={on ? 'page' : undefined}
+                  className={`w-full h-[46px] flex items-center gap-3 px-3.5 rounded-full transition-colors cursor-pointer text-left ${
+                    on ? 'bg-rose-600 text-white font-semibold shadow-[0_8px_20px_rgba(225,29,72,.35)]' : 'text-slate-700 hover:bg-rose-50 hover:text-rose-600'
+                  }`}
+                >
+                  <span className={`w-[30px] h-[30px] rounded-full flex items-center justify-center shrink-0 ${on ? 'bg-white/20 text-white' : 'bg-rose-50 text-rose-600'}`}>
+                    <Icon name={n.key} />
+                  </span>
+                  <span className="flex-1 min-w-0 truncate">{n.label}</span>
+                  {n.count > 0 && (
+                    <span className={`text-xs font-bold leading-[22px] px-[9px] rounded-full ${
+                      on ? 'bg-white text-rose-600' : n.hot ? 'bg-slate-900 text-white' : 'bg-rose-100 text-rose-700'
+                    }`}>
+                      {n.count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </nav>
-        </div>
 
-        {/* Sidebar Footer / User Profile */}
-        <div className="p-4 border-t border-slate-800/80 bg-slate-950/40">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <span className={`w-2 h-2 rounded-full ${loadError ? 'bg-red-500' : 'bg-emerald-500 animate-pulse'}`}></span>
-              <span className={`text-[11px] ${loadError ? 'text-red-400' : 'text-slate-400'}`}>
-                {loadError ? 'โหลดข้อมูลจาก Google Sheets ไม่สำเร็จ' : 'Google Sheets'}
-              </span>
-            </div>
-            <button
-              onClick={fetchAllData}
-              disabled={refreshing}
-              className="text-[10px] text-blue-400 hover:underline cursor-pointer"
-            >
-              {refreshing ? 'ซิงค์ข้อมูล...' : '↻ รีเฟรช'}
-            </button>
-          </div>
+          {/* Sidebar Footer / User Profile */}
+          <div className="mt-auto flex flex-col gap-3.5">
+            {followCounts.OVERDUE > 0 && (
+              <div className="relative overflow-hidden rounded-3xl bg-rose-600 text-white p-[18px] flex flex-col gap-2.5">
+                <div aria-hidden="true" className="absolute -right-6 -top-6 w-24 h-24 rounded-full bg-white/15"></div>
+                <span className="relative font-display text-[30px] font-bold leading-none">{followCounts.OVERDUE}</span>
+                <span className="relative font-semibold leading-snug">ลูกค้าเลยกำหนดนัดโทร<br />รอคุณติดตามอยู่</span>
+                <button
+                  onClick={() => setCurrentTab('follow-up')}
+                  className="relative self-start h-[38px] px-4 rounded-full bg-white text-rose-600 hover:bg-rose-50 text-[13px] font-semibold cursor-pointer"
+                >
+                  ไปที่คิวโทร →
+                </button>
+              </div>
+            )}
 
-          <div className="flex items-center justify-between pt-2 border-t border-slate-800/60">
-            <div className="flex items-center gap-2.5 overflow-hidden">
-              <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center text-xs shrink-0">
+            <div className="flex items-center gap-2.5 px-1.5 py-1">
+              <div className="w-10 h-10 rounded-full bg-slate-900 text-white font-display font-bold flex items-center justify-center text-[15px] shrink-0">
                 {currentUser.name ? currentUser.name[0].toUpperCase() : 'U'}
               </div>
-              <div className="truncate">
-                <div className="text-xs font-semibold text-white truncate">{currentUser.name}</div>
-                <div className="text-[10px] text-slate-400 truncate">{currentUser.email}</div>
+              <div className="flex-1 min-w-0 leading-tight">
+                <div className="text-sm font-semibold text-slate-900 truncate" title={currentUser.email}>{currentUser.name}</div>
+                <button
+                  onClick={fetchAllData}
+                  disabled={refreshing}
+                  title="รีเฟรชข้อมูลจาก Google Sheets"
+                  className={`max-w-full flex items-center gap-1.5 text-xs cursor-pointer hover:text-rose-600 ${loadError ? 'text-red-600' : 'text-slate-500'}`}
+                >
+                  <span className={`w-[7px] h-[7px] rounded-full shrink-0 ${loadError ? 'bg-red-500' : 'bg-emerald-600'}`}></span>
+                  <span className="truncate">
+                    {loadError ? 'โหลด Sheets ไม่สำเร็จ' : refreshing ? 'กำลังซิงค์...' : 'Sheets ซิงก์แล้ว'}
+                  </span>
+                  <Icon name="refresh" size={12} className={`shrink-0 ${refreshing ? 'animate-spin' : ''}`} />
+                </button>
               </div>
+              <button
+                onClick={handleLogout}
+                title="ออกจากระบบ"
+                aria-label="ออกจากระบบ"
+                className="w-[38px] h-[38px] shrink-0 rounded-full bg-rose-50 text-rose-700 hover:bg-rose-600 hover:text-white flex items-center justify-center cursor-pointer"
+              >
+                <Icon name="logout" size={17} />
+              </button>
             </div>
-            <button
-              onClick={handleLogout}
-              title="ออกจากระบบ"
-              className="p-1.5 text-slate-400 hover:text-red-400 rounded-lg hover:bg-slate-800 cursor-pointer"
-            >
-              🚪
-            </button>
           </div>
         </div>
       </aside>
@@ -1050,27 +1329,24 @@ export default function App() {
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
 
         {/* TOP HEADER BAR */}
-        <header className="h-16 bg-white border-b border-slate-200 px-8 flex items-center justify-between sticky top-0 z-20">
-          <div className="flex items-center gap-4 flex-1 max-w-md">
-            <div className="relative w-full">
-              <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400 text-xs">🔍</span>
-              <input
-                type="text"
-                placeholder="ค้นหา Booking No., อีเมล, หัวข้อ..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              />
-            </div>
+        <header className="h-16 bg-rose-50/90 backdrop-blur px-8 flex items-center justify-between gap-3 sticky top-0 z-20">
+          <div className="relative flex-1 max-w-[520px] flex items-center">
+            <Icon name="search" size={18} className="absolute left-[18px] text-rose-600" />
+            <input
+              type="search"
+              aria-label="ค้นหา"
+              placeholder="ค้นหา Booking No., อีเมล, หัวข้อ..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full h-[46px] pl-12 pr-[18px] bg-white border-2 border-transparent rounded-full text-sm focus:border-rose-300 focus:outline-none"
+            />
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-slate-700">{currentUser.name}</span>
-              <span className="text-[10px] bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-bold">
-                {currentUser.role}
-              </span>
-            </div>
+          <div className="flex items-center gap-2.5">
+            <span className="hidden md:inline text-sm font-semibold text-slate-700">{currentUser.name}</span>
+            <span className="h-[46px] px-[18px] inline-flex items-center rounded-full bg-slate-900 text-white text-[13.5px] font-semibold">
+              {currentUser.role}
+            </span>
           </div>
         </header>
 
@@ -1082,53 +1358,58 @@ export default function App() {
           {/* ========================================================================= */}
           {currentTab === 'dashboard' && (
             <div className="space-y-6">
-              <div>
-                <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">ภาพรวมระบบ (Dashboard)</h2>
-                <p className="text-xs text-slate-500 mt-0.5">สรุปสถานะการรับและส่งต่ออีเมลประกันภัยอัตโนมัติ</p>
-              </div>
+              <section aria-labelledby="pg-title" className="relative overflow-hidden rounded-3xl bg-rose-600 text-white px-8 py-7">
+                <div aria-hidden="true" className="absolute -right-[60px] -top-[90px] w-[280px] h-[280px] rounded-full bg-white/10"></div>
+                <div aria-hidden="true" className="absolute right-[220px] top-[34px] w-16 h-16 rounded-full border-[10px] border-white/15"></div>
+                <div className="relative">
+                  <span className="inline-flex items-center h-7 px-3 rounded-full bg-white/20 text-[12.5px] font-semibold">ภาพรวม</span>
+                  <h2 id="pg-title" className="font-display mt-3 text-[38px] font-bold leading-tight">ภาพรวมระบบ (Dashboard)</h2>
+                  <p className="mt-1.5 text-[15px]">สรุปสถานะการรับและส่งต่ออีเมลประกันภัยอัตโนมัติ</p>
+                </div>
+              </section>
 
               {/* 4 Metric Cards */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
                   <div>
                     <div className="text-xs font-medium text-slate-500">อีเมลทั้งหมด</div>
-                    <div className="text-2xl font-black text-slate-800 mt-1">{dashboardData.metrics.total}</div>
+                    <div className="font-display text-[28px] font-bold leading-tight text-slate-800 mt-1">{dashboardData.metrics.total}</div>
                   </div>
-                  <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center text-xl">
-                    📧
+                  <div className="w-12 h-12 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center text-xl">
+                    <Icon name="mail" size={22} />
                   </div>
                 </div>
 
                 <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
                   <div>
                     <div className="text-xs font-medium text-slate-500">ส่งต่อบริษัทประกันแล้ว</div>
-                    <div className="text-2xl font-black text-emerald-600 mt-1">{dashboardData.metrics.forwarded}</div>
+                    <div className="font-display text-[28px] font-bold leading-tight text-emerald-600 mt-1">{dashboardData.metrics.forwarded}</div>
                     <div className="text-[11px] text-slate-400 mt-1">{pct(dashboardData.metrics.forwarded)} ของทั้งหมด</div>
                   </div>
                   <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl">
-                    ✅
+                    <Icon name="check" size={22} />
                   </div>
                 </div>
 
                 <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
                   <div>
                     <div className="text-xs font-medium text-slate-500">Needs Review</div>
-                    <div className="text-2xl font-black text-amber-500 mt-1">{needsReviewEmails.length}</div>
+                    <div className="font-display text-[28px] font-bold leading-tight text-amber-500 mt-1">{needsReviewEmails.length}</div>
                     <div className="text-[11px] text-amber-600 font-medium mt-1">ไม่อยู่ใน Master Data</div>
                   </div>
                   <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center text-xl">
-                    ⚠️
+                    <Icon name="needs-review" size={22} />
                   </div>
                 </div>
 
                 <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
                   <div>
                     <div className="text-xs font-medium text-slate-500">รอดำเนินการ</div>
-                    <div className="text-2xl font-black text-blue-600 mt-1">{dashboardData.metrics.pending}</div>
+                    <div className="font-display text-[28px] font-bold leading-tight text-rose-600 mt-1">{dashboardData.metrics.pending}</div>
                     <div className="text-[11px] text-slate-400 mt-1">{pct(dashboardData.metrics.pending)} ของทั้งหมด</div>
                   </div>
                   <div className="w-12 h-12 rounded-xl bg-slate-100 text-slate-600 flex items-center justify-center text-xl">
-                    ⏳
+                    <Icon name="activity-logs" size={22} />
                   </div>
                 </div>
               </div>
@@ -1142,7 +1423,7 @@ export default function App() {
                   </div>
                   <button
                     onClick={() => setCurrentTab('inbox')}
-                    className="text-xs text-blue-600 hover:text-blue-800 font-semibold cursor-pointer"
+                    className="text-xs text-rose-600 hover:text-rose-800 font-semibold cursor-pointer"
                   >
                     ดูทั้งหมดใน Inbox →
                   </button>
@@ -1175,8 +1456,8 @@ export default function App() {
                           </td>
                           <td className="p-3.5 text-right pr-5">
                             <button
-                              onClick={() => setSelectedEmail(item)}
-                              className="px-3 py-1 bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-600 rounded-lg font-medium transition-colors cursor-pointer"
+                              onClick={() => { setInboxFilter('ALL'); setSelectedEmail(item); setCurrentTab('inbox'); }}
+                              className="px-3 py-1 bg-slate-100 hover:bg-rose-50 text-slate-700 hover:text-rose-600 rounded-lg font-medium transition-colors cursor-pointer"
                             >
                               ดูรายละเอียด
                             </button>
@@ -1194,10 +1475,10 @@ export default function App() {
           {/* TAB 2: INBOX (รายการอีเมล)                                                 */}
           {/* ========================================================================= */}
           {currentTab === 'inbox' && (
-            <div className="space-y-5">
+            <div className="flex flex-col gap-4 h-[calc(100vh-8rem)]">
               <div className="flex items-center justify-between flex-wrap gap-4">
                 <div>
-                  <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">รายการอีเมล (Inbox)</h2>
+                  <h2 className="page-title">รายการอีเมล (Inbox)</h2>
                   <p className="text-xs text-slate-500">จัดการอีเมลขาเข้าทั้งหมดและตรวจสอบสถานะการส่งต่อ</p>
                 </div>
 
@@ -1205,7 +1486,7 @@ export default function App() {
                   <button
                     onClick={() => setInboxFilter('ALL')}
                     className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                      inboxFilter === 'ALL' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                      inboxFilter === 'ALL' ? 'bg-white text-rose-600 shadow-xs' : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
                     ทั้งหมด ({emails.length})
@@ -1229,7 +1510,7 @@ export default function App() {
                   <button
                     onClick={() => setInboxFilter('PENDING')}
                     className={`px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                      inboxFilter === 'PENDING' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                      inboxFilter === 'PENDING' ? 'bg-white text-rose-600 shadow-xs' : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
                     รอดำเนินการ ({emails.filter(e => isPendingStatus(e.status)).length})
@@ -1237,44 +1518,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
-                    <tr>
-                      <th className="p-3.5 pl-5">วันที่/เวลา</th>
-                      <th className="p-3.5">อีเมลผู้รับ</th>
-                      <th className="p-3.5">หัวข้อ</th>
-                      <th className="p-3.5">สถานะ</th>
-                      <th className="p-3.5 text-right pr-5">การดำเนินการ</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {filteredEmails.map((item, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="p-3.5 pl-5 text-slate-500 whitespace-nowrap">{item.timestamp}</td>
-                        <td className="p-3.5 font-bold text-slate-800">{item.recipientEmail}</td>
-                        <td className="p-3.5 text-slate-700 font-medium truncate max-w-sm">{item.subject}</td>
-                        <td className="p-3.5">
-                          <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${
-                            isForwarded(item.status) ? 'badge-sent' :
-                            item.status === 'Needs Review' ? 'badge-review' : 'badge-pending'
-                          }`}>
-                            {item.status || '-'}
-                          </span>
-                        </td>
-                        <td className="p-3.5 text-right pr-5">
-                          <button
-                            onClick={() => setSelectedEmail(item)}
-                            className="px-3.5 py-1.5 bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white rounded-lg font-semibold transition-all cursor-pointer"
-                          >
-                            ดูรายละเอียด
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              {mailbox(filteredEmails, 'ไม่มีอีเมลในตัวกรองนี้')}
             </div>
           )}
 
@@ -1282,10 +1526,10 @@ export default function App() {
           {/* TAB 3: NEEDS REVIEW (คัดกรองเมลไม่อยู่ใน Whitelist)                         */}
           {/* ========================================================================= */}
           {currentTab === 'needs-review' && (
-            <div className="space-y-5">
+            <div className="flex flex-col gap-4 h-[calc(100vh-8rem)]">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">Needs Review (ไม่พบใน Master Data)</h2>
+                  <h2 className="page-title">Needs Review (ไม่พบใน Master Data)</h2>
                   <p className="text-xs text-slate-500">อีเมลขาเข้าที่ระบบไม่ส่งต่ออัตโนมัติ เจ้าหน้าที่ต้องตรวจสอบก่อน (ตรวจสอบ → ส่งต่ออีกครั้ง / เพิ่มผู้ส่งเข้า Master Data / ปิดรายการ)</p>
                 </div>
                 <div className="bg-amber-50 text-amber-800 border border-amber-200 px-3 py-1.5 rounded-xl text-xs font-bold">
@@ -1293,51 +1537,7 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
-                    <tr>
-                      <th className="p-3.5 pl-5">วันที่/เวลา</th>
-                      <th className="p-3.5">อีเมลผู้ส่ง</th>
-                      <th className="p-3.5">หัวข้ออีเมล</th>
-                      <th className="p-3.5">เหตุผล</th>
-                      <th className="p-3.5 text-right pr-5">การดำเนินการ</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {needsReviewEmails.map((item, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="p-3.5 pl-5 text-slate-500 whitespace-nowrap">{item.timestamp}</td>
-                        <td className={`p-3.5 font-bold ${inMaster(item.recipientEmail) ? 'text-slate-700' : 'text-red-600'}`}>{item.recipientEmail}</td>
-                        <td className="p-3.5 text-slate-700 font-medium truncate max-w-sm">{item.subject}</td>
-                        <td className="p-3.5 text-slate-500 max-w-xs">{item.errorDetail || '-'}</td>
-                        <td className="p-3.5 text-right pr-5 space-x-2">
-                          <button
-                            onClick={() => setSelectedEmail(item)}
-                            className="px-3 py-1.5 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg font-medium cursor-pointer"
-                          >
-                            ตรวจสอบ
-                          </button>
-                          {!inMaster(item.recipientEmail) && (
-                            <button
-                              onClick={() => handleQuickWhitelist(item.recipientEmail, item.customerName)}
-                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold shadow-xs cursor-pointer"
-                            >
-                              + เพิ่มเข้า Master Data ทันที
-                            </button>
-                          )}
-                          <button
-                            onClick={() => handleCloseEmail(item.id)}
-                            className="px-3 py-1.5 border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-lg font-medium cursor-pointer"
-                          >
-                            ปิดรายการ
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              {mailbox(needsReviewEmails, 'ไม่มีอีเมลที่รอตรวจสอบ')}
             </div>
           )}
 
@@ -1348,19 +1548,21 @@ export default function App() {
             <div className="space-y-5">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">Master Data (รายการอีเมลที่อนุญาต)</h2>
+                  <h2 className="page-title">Master Data (รายการอีเมลที่อนุญาต)</h2>
                   <p className="text-xs text-slate-500">รายชื่อลูกค้าและคู่ค้าที่ระบบอนุญาตให้ Auto Forward ไปยังบริษัทประกัน</p>
                 </div>
+                {canEdit && (
                 <button
                   onClick={() => {
                     setEditingCustomer(null);
                     setCustomerForm(emptyCustomerForm);
                     setIsCustomerModalOpen(true);
                   }}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer"
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer"
                 >
                   + เพิ่มรายการ
                 </button>
+                )}
               </div>
 
               <div className="flex flex-wrap gap-2 text-xs">
@@ -1372,7 +1574,7 @@ export default function App() {
                   <button
                     key={key}
                     onClick={() => setMasterFilter(key)}
-                    className={`px-3 py-1.5 rounded-lg font-semibold cursor-pointer border ${masterFilter === key ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+                    className={`px-3 py-1.5 rounded-lg font-semibold cursor-pointer border ${masterFilter === key ? 'bg-rose-600 text-white border-rose-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
                   >
                     {label}
                   </button>
@@ -1414,6 +1616,7 @@ export default function App() {
                         </td>
                         <td className="p-3.5 text-center text-slate-700">{item.customerStatus || '-'}</td>
                         <td className="p-3.5 text-right pr-5">
+                          {canEdit && (<>
                           <button
                             onClick={() => {
                               setRenewTarget(item);
@@ -1432,6 +1635,7 @@ export default function App() {
                                 phone: item.phone,
                                 type: item.type,
                                 policy: item.policy,
+                                currentInsurer: item.currentInsurer,
                                 dataStatus: item.dataStatus,
                                 customerStatus: item.customerStatus,
                                 notes: item.notes,
@@ -1439,10 +1643,11 @@ export default function App() {
                               });
                               setIsCustomerModalOpen(true);
                             }}
-                            className="px-3 py-1 text-blue-600 hover:bg-blue-50 rounded-lg font-semibold cursor-pointer"
+                            className="px-3 py-1 text-rose-600 hover:bg-rose-50 rounded-lg font-semibold cursor-pointer"
                           >
                             แก้ไข
                           </button>
+                          </>)}
                         </td>
                       </tr>
                     ))}
@@ -1458,7 +1663,7 @@ export default function App() {
           {currentTab === 'follow-up' && (
             <div className="space-y-5">
               <div>
-                <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">ติดตามลูกค้า</h2>
+                <h2 className="page-title">ติดตามลูกค้า</h2>
                 <p className="text-xs text-slate-500">คิวโทรหลังส่งอีเมลแจ้งเตือน R1/R2 และบันทึกผลการโทร (บันทึกลงชีต Call_Logs และอัปเดตสถานะลูกค้าใน Master Data)</p>
               </div>
 
@@ -1466,13 +1671,13 @@ export default function App() {
                 {[
                   ['TODAY', 'ต้องโทรวันนี้', 'text-amber-600'],
                   ['OVERDUE', 'เลยกำหนดนัด', 'text-red-600'],
-                  ['NEVER', 'ยังไม่เคยโทร (หลังส่งอีเมล)', 'text-blue-600'],
+                  ['NEVER', 'ยังไม่เคยโทร (หลังส่งอีเมล)', 'text-rose-600'],
                   ['ALL', 'ลูกค้าในคิวทั้งหมด', 'text-slate-800']
                 ].map(([key, label, color]) => (
                   <button
                     key={key}
                     onClick={() => setFollowFilter(key)}
-                    className={`text-left bg-white border rounded-2xl p-4 cursor-pointer ${followFilter === key ? 'border-blue-500 ring-2 ring-blue-100' : 'border-slate-200 hover:border-slate-300'}`}
+                    className={`text-left bg-white border rounded-2xl p-4 cursor-pointer ${followFilter === key ? 'border-rose-500 ring-2 ring-rose-100' : 'border-slate-200 hover:border-slate-300'}`}
                   >
                     <div className="text-xs text-slate-500">{label}</div>
                     <div className={`text-2xl font-black mt-1 ${color}`}>{followCounts[key]}</div>
@@ -1494,7 +1699,7 @@ export default function App() {
                       <button
                         key={key}
                         onClick={() => setFollowFilter(key)}
-                        className={`px-3 py-1.5 rounded-lg font-semibold cursor-pointer border ${followFilter === key ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+                        className={`px-3 py-1.5 rounded-lg font-semibold cursor-pointer border ${followFilter === key ? 'bg-rose-600 text-white border-rose-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
                       >
                         {label}
                       </button>
@@ -1520,7 +1725,7 @@ export default function App() {
                         {followRows.map(f => {
                           const due = dueLabel(f);
                           return (
-                            <tr key={f.id} className={followSelectedId === f.id ? 'bg-blue-50/70' : 'hover:bg-slate-50/80'}>
+                            <tr key={f.id} className={followSelectedId === f.id ? 'bg-rose-50/70' : 'hover:bg-slate-50/80'}>
                               <td className="p-3.5 pl-5">
                                 <div className="font-bold text-slate-800">{f.name || f.email}</div>
                                 <div className="text-[11px] text-slate-500">{f.type || '-'}</div>
@@ -1531,12 +1736,12 @@ export default function App() {
                               <td className="p-3.5"><span className={`px-2.5 py-0.5 rounded-full font-bold text-[11px] whitespace-nowrap ${customerStatusBadge(f.customerStatus)}`}>{f.customerStatus || 'รอดำเนินการ'}</span></td>
                               <td className="p-3.5 whitespace-nowrap"><span className={`px-2.5 py-0.5 rounded-full font-bold text-[11px] ${due.cls}`}>{due.text}</span></td>
                               <td className="p-3.5 pr-5 text-right">
-                                <button
+                                {canEdit && <button
                                   onClick={() => openCallForm(f)}
-                                  className={`px-3 py-1.5 rounded-lg font-bold whitespace-nowrap cursor-pointer ${followSelectedId === f.id ? 'bg-blue-600 text-white' : 'border border-blue-200 text-blue-700 hover:bg-blue-50'}`}
+                                  className={`px-3 py-1.5 rounded-lg font-bold whitespace-nowrap cursor-pointer ${followSelectedId === f.id ? 'bg-rose-600 text-white' : 'border border-rose-200 text-rose-700 hover:bg-rose-50'}`}
                                 >
                                   บันทึกการโทร
-                                </button>
+                                </button>}
                               </td>
                             </tr>
                           );
@@ -1568,7 +1773,7 @@ export default function App() {
                               type="button"
                               aria-pressed={callForm.callResult === r}
                               onClick={() => setCallForm({ ...callForm, callResult: r })}
-                              className={`px-3 py-1.5 rounded-lg border cursor-pointer ${callForm.callResult === r ? 'border-blue-600 bg-blue-50 text-blue-700 font-bold' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+                              className={`px-3 py-1.5 rounded-lg border cursor-pointer ${callForm.callResult === r ? 'border-rose-600 bg-rose-50 text-rose-700 font-bold' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}
                             >
                               {r}
                             </button>
@@ -1581,7 +1786,7 @@ export default function App() {
                           id="call-status"
                           value={callForm.customerStatus}
                           onChange={(e) => setCallForm({ ...callForm, customerStatus: e.target.value })}
-                          className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500"
                         >
                           {CUSTOMER_STATUSES.map(st => (
                             <option key={st} value={st}>{st}{CUSTOMER_STATUS_HINTS[st] || ''}</option>
@@ -1598,7 +1803,7 @@ export default function App() {
                             min={todayIso}
                             value={callForm.nextFollowup}
                             onChange={(e) => setCallForm({ ...callForm, nextFollowup: e.target.value })}
-                            className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500"
                           />
                         </div>
                         <div>
@@ -1608,7 +1813,7 @@ export default function App() {
                             type="text"
                             value={callForm.assignedAgent}
                             onChange={(e) => setCallForm({ ...callForm, assignedAgent: e.target.value })}
-                            className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                            className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500"
                           />
                         </div>
                       </div>
@@ -1620,13 +1825,13 @@ export default function App() {
                           value={callForm.notes}
                           onChange={(e) => setCallForm({ ...callForm, notes: e.target.value })}
                           placeholder="สรุปสิ่งที่คุยกับลูกค้า"
-                          className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                          className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500"
                         />
                       </div>
                       <p className="text-[11px] text-slate-400">ไม่ใส่วันนัด = ล้างวันนัดเดิมของลูกค้ารายนี้</p>
                       <div className="flex justify-end gap-2 pt-1">
                         <button type="button" onClick={() => setFollowSelectedId(null)} className="px-4 py-2 border border-slate-200 text-slate-600 rounded-xl font-semibold hover:bg-slate-50 cursor-pointer">ยกเลิก</button>
-                        <button type="submit" className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-xs cursor-pointer">บันทึกผลการโทร</button>
+                        <button type="submit" className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-xs cursor-pointer">บันทึกผลการโทร</button>
                       </div>
                     </form>
 
@@ -1638,7 +1843,7 @@ export default function App() {
                         <ol className="space-y-2.5">
                           {followHistory.map(h => (
                             <li key={h.key} className="flex gap-2.5 text-xs">
-                              <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${h.kind === 'call' ? 'bg-blue-600' : 'bg-emerald-600'}`}></span>
+                              <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${h.kind === 'call' ? 'bg-rose-600' : 'bg-emerald-600'}`}></span>
                               <div className="min-w-0">
                                 <div className="font-semibold text-slate-800">{h.title}</div>
                                 <div className="text-[11px] text-slate-500 break-words">{h.time}{h.detail ? ` · ${h.detail}` : ''}</div>
@@ -1657,26 +1862,16 @@ export default function App() {
           {/* ========================================================================= */}
           {/* TAB 5: EMAIL TEMPLATES (เทมเพลตอีเมล HTML)                                  */}
           {/* ========================================================================= */}
-          {currentTab === 'templates' && (
+          {currentTab === 'templates' && isAdmin && (
             <div className="space-y-5">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">เทมเพลตอีเมล (Email Templates)</h2>
+                  <h2 className="page-title">เทมเพลตอีเมล (Email Templates)</h2>
                   <p className="text-xs text-slate-500">จัดการเนื้อหาอีเมลและโค้ด HTML สำหรับส่งแจ้งลูกค้าและบริษัทประกัน</p>
                 </div>
                 <button
                   onClick={() => {
-                    const defaultSimple = {
-                      title: 'แจ้งข้อมูลการทำประกันภัย',
-                      titleColor: '#2563eb',
-                      greeting: 'เรียน คุณ {{customerName}},',
-                      messageBody: 'ระบบได้รับข้อมูลการจองทำประกันภัยของท่านเรียบร้อยแล้ว รายละเอียดความคุ้มครองและเอกสารประกอบมีดังต่อไปนี้ หากมีข้อสงสัยหรือต้องการสอบถามเพิ่มเติม สามารถติดต่อเจ้าหน้าที่ได้ตลอดเวลา ขอบคุณค่ะ',
-                      showBooking: true,
-                      showExpiry: true,
-                      showDrive: true,
-                      footer: 'AutoMail Insurance Automation System • ติดต่อฝ่ายบริการลูกค้า โทร 02-xxx-xxxx'
-                    };
-                    setSimpleTemplate(defaultSimple);
+                    setSimpleTemplate(DEFAULT_SIMPLE);
                     setTemplateEditorMode('simple');
                     setTemplateForm({
                       id: '',
@@ -1685,11 +1880,11 @@ export default function App() {
                       recipientType: 'ส่งถึงลูกค้า',
                       status: 'Active',
                       description: 'เทมเพลตสำหรับส่งแจ้งข้อมูลลูกค้า',
-                      htmlContent: buildHtmlFromSimple(defaultSimple)
+                      htmlContent: buildHtmlFromSimple(DEFAULT_SIMPLE)
                     });
                     setIsTemplateModalOpen(true);
                   }}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer"
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer"
                 >
                   + สร้างเทมเพลต
                 </button>
@@ -1712,7 +1907,7 @@ export default function App() {
                         <td className="p-3.5 pl-5 font-bold text-slate-800">{t.name}</td>
                         <td className="p-3.5 text-slate-700 font-medium">{t.subject}</td>
                         <td className="p-3.5">
-                          <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs font-medium">
+                          <span className="bg-rose-50 text-rose-700 px-2 py-0.5 rounded text-xs font-medium">
                             {t.recipientType}
                           </span>
                         </td>
@@ -1724,13 +1919,11 @@ export default function App() {
                         <td className="p-3.5 text-right pr-5 space-x-2">
                           <button
                             onClick={() => {
-                              const parsed = extractSimpleFromHtml(t.htmlContent);
-                              setSimpleTemplate(parsed);
-                              setTemplateEditorMode('simple');
                               setTemplateForm(t);
+                              openSimpleEditor(t.htmlContent);
                               setIsTemplateModalOpen(true);
                             }}
-                            className="px-2.5 py-1 bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-700 rounded-lg font-semibold cursor-pointer transition-colors"
+                            className="px-2.5 py-1 bg-rose-50 hover:bg-rose-600 hover:text-white text-rose-700 rounded-lg font-semibold cursor-pointer transition-colors"
                           >
                             ✏️ แก้ไขเทมเพลต
                           </button>
@@ -1752,44 +1945,44 @@ export default function App() {
           {/* ========================================================================= */}
           {/* TAB 6: SYSTEM SETTINGS (ตั้งค่าระบบ - ชีต config)                            */}
           {/* ========================================================================= */}
-          {currentTab === 'settings' && (
+          {currentTab === 'settings' && isAdmin && (
             <div className="space-y-5">
               <div>
-                <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">ตั้งค่าระบบ (System Settings)</h2>
-                <p className="text-xs text-slate-500">ซิงค์การตั้งค่าทั้งหมดลงใน Google Sheet แผ่นงาน: <code className="bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded font-mono font-bold">config</code></p>
+                <h2 className="page-title">ตั้งค่าระบบ (System Settings)</h2>
+                <p className="text-xs text-slate-500">ซิงค์การตั้งค่าทั้งหมดลงใน Google Sheet แผ่นงาน: <code className="bg-rose-50 text-rose-700 px-1.5 py-0.5 rounded font-mono font-bold">config</code></p>
               </div>
 
               <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden grid grid-cols-1 md:grid-cols-4">
                 {/* Left Sub-tabs */}
-                <div className="p-4 bg-slate-50 border-r border-slate-200 space-y-1 text-xs font-medium">
+                <div className="p-2.5 border-r border-slate-200 space-y-1 text-[13.5px] font-semibold">
                   <button
                     onClick={() => setSettingsSubTab('insurance')}
-                    className={`w-full text-left px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
-                      settingsSubTab === 'insurance' ? 'bg-blue-600 text-white font-bold shadow-xs' : 'text-slate-600 hover:bg-slate-200/60'
+                    className={`w-full text-left min-h-11 px-4 py-2.5 rounded-full transition-colors cursor-pointer ${
+                      settingsSubTab === 'insurance' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-rose-50 hover:text-rose-600'
                     }`}
                   >
                     อีเมลบริษัทประกัน
                   </button>
                   <button
                     onClick={() => setSettingsSubTab('general')}
-                    className={`w-full text-left px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
-                      settingsSubTab === 'general' ? 'bg-blue-600 text-white font-bold shadow-xs' : 'text-slate-600 hover:bg-slate-200/60'
+                    className={`w-full text-left min-h-11 px-4 py-2.5 rounded-full transition-colors cursor-pointer ${
+                      settingsSubTab === 'general' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-rose-50 hover:text-rose-600'
                     }`}
                   >
                     ข้อมูลทั่วไป & Webhook
                   </button>
                   <button
                     onClick={() => setSettingsSubTab('drive-links')}
-                    className={`w-full text-left px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
-                      settingsSubTab === 'drive-links' ? 'bg-blue-600 text-white font-bold shadow-xs' : 'text-slate-600 hover:bg-slate-200/60'
+                    className={`w-full text-left min-h-11 px-4 py-2.5 rounded-full transition-colors cursor-pointer ${
+                      settingsSubTab === 'drive-links' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-rose-50 hover:text-rose-600'
                     }`}
                   >
                     ไฟล์แนบ Google Drive
                   </button>
                   <button
                     onClick={() => setSettingsSubTab('users')}
-                    className={`w-full text-left px-3.5 py-2.5 rounded-xl transition-all cursor-pointer ${
-                      settingsSubTab === 'users' ? 'bg-blue-600 text-white font-bold shadow-xs' : 'text-slate-600 hover:bg-slate-200/60'
+                    className={`w-full text-left min-h-11 px-4 py-2.5 rounded-full transition-colors cursor-pointer ${
+                      settingsSubTab === 'users' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-rose-50 hover:text-rose-600'
                     }`}
                   >
                     จัดการสิทธิ์ผู้ใช้งาน (Users)
@@ -1812,7 +2005,7 @@ export default function App() {
                           type="text"
                           value={config.system.insurance_name || ''}
                           onChange={(e) => setConfig({ ...config, system: { ...config.system, insurance_name: e.target.value } })}
-                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500"
+                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-rose-500"
                         />
                       </div>
 
@@ -1822,7 +2015,7 @@ export default function App() {
                           type="email"
                           value={config.system.insurance_email || ''}
                           onChange={(e) => setConfig({ ...config, system: { ...config.system, insurance_email: e.target.value } })}
-                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500"
+                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-rose-500"
                         />
                         <span className="text-[11px] text-slate-400 mt-1 block">กำหนดค่าอีเมลระบบปลายทาง</span>
                       </div>
@@ -1836,7 +2029,7 @@ export default function App() {
                           type="checkbox"
                           checked={String(config.system.auto_forward).toLowerCase() === 'true'}
                           onChange={(e) => setConfig({ ...config, system: { ...config.system, auto_forward: e.target.checked ? 'true' : 'false' } })}
-                          className="w-5 h-5 accent-blue-600 rounded cursor-pointer"
+                          className="w-5 h-5 accent-rose-600 rounded cursor-pointer"
                         />
                       </div>
 
@@ -1847,7 +2040,7 @@ export default function App() {
                           value={config.system.subject_prefixes || ''}
                           onChange={(e) => setConfig({ ...config, system: { ...config.system, subject_prefixes: e.target.value } })}
                           placeholder="[PorInsurance], [แจ้งเตือนครบกำหนด"
-                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 font-mono"
+                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-rose-500 font-mono"
                         />
                         <span className="text-[11px] text-slate-400 mt-1 block">คั่นด้วยเครื่องหมาย , ใช้กับผู้ส่งที่อยู่ใน Master Data และไม่ใช่การตอบกลับอีเมลของระบบ ถ้าหัวข้อไม่มี prefix จะเข้า Needs Review</span>
                       </div>
@@ -1859,7 +2052,7 @@ export default function App() {
                           value={config.system.attachment_folder_id || ''}
                           onChange={(e) => setConfig({ ...config, system: { ...config.system, attachment_folder_id: e.target.value } })}
                           placeholder="ส่วนท้ายของลิงก์โฟลเดอร์ เช่น drive.google.com/drive/folders/<ID>"
-                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 font-mono"
+                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-rose-500 font-mono"
                         />
                         <span className="text-[11px] text-slate-400 mt-1 block">ต้องแชร์โฟลเดอร์ให้อีเมล Service Account ของระบบ (ผู้มีสิทธิ์อ่าน) เพื่อให้เปิดดูไฟล์ในเว็บได้ ว่าง = ไม่เก็บไฟล์แนบ</span>
                       </div>
@@ -1867,7 +2060,7 @@ export default function App() {
                       <div className="pt-3">
                         <button
                           onClick={handleSaveSystemConfig}
-                          className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer"
+                          className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer"
                         >
                           บันทึกการตั้งค่า
                         </button>
@@ -1890,14 +2083,38 @@ export default function App() {
                           value={config.system.n8n_webhook_url || ''}
                           onChange={(e) => setConfig({ ...config, system: { ...config.system, n8n_webhook_url: e.target.value } })}
                           placeholder="http://localhost:5678/webhook/re-forward"
-                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 font-mono"
+                          className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-rose-500 font-mono"
                         />
+                      </div>
+
+                      <div className="pt-3 border-t border-slate-100 space-y-4">
+                        <h4 className="font-bold text-xs text-slate-800">รอบแจ้งเตือนและอีเมลแจ้งเจ้าหน้าที่</h4>
+                        {[
+                          ['r1_days_before', 'R1: ส่งเมื่อเหลือไม่เกิน (วัน)', 'number', '180', 'ค่าแนะนำ 180 วัน (≈ 6 เดือน) ลูกค้าที่เพิ่มเข้ามาหลังช่วง R1 จะได้แค่ R2'],
+                          ['r2_days_before', 'R2: ส่งเมื่อเหลือไม่เกิน (วัน)', 'number', '90', 'ค่าแนะนำ 90 วัน (≈ 3 เดือน) ต้องน้อยกว่า R1'],
+                          ['admin_report_email', 'ผู้รับรายงานสรุปการส่งประจำวัน', 'text', 'admin@example.com, boss@example.com', 'คั่นด้วย , ได้หลายอีเมล ว่าง = ไม่ส่งรายงาน'],
+                          ['review_alert_email', 'ผู้รับแจ้งเตือนอีเมล Needs Review', 'text', 'staff@example.com', 'คั่นด้วย , ได้หลายอีเมล ว่าง = ไม่ส่งแจ้งเตือน']
+                        ].map(([key, label, type, placeholder, hint]) => (
+                          <div key={key}>
+                            <label htmlFor={`cfg-${key}`} className="block text-xs font-semibold text-slate-700 mb-1">{label}</label>
+                            <input
+                              id={`cfg-${key}`}
+                              type={type}
+                              min={type === 'number' ? 1 : undefined}
+                              value={config.system[key] ?? ''}
+                              onChange={(e) => setConfig({ ...config, system: { ...config.system, [key]: e.target.value } })}
+                              placeholder={placeholder}
+                              className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-rose-500 font-mono"
+                            />
+                            <span className="text-[11px] text-slate-400 mt-1 block">{hint}</span>
+                          </div>
+                        ))}
                       </div>
 
                       <div className="pt-3">
                         <button
                           onClick={handleSaveSystemConfig}
-                          className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer"
+                          className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer"
                         >
                           บันทึกการตั้งค่า
                         </button>
@@ -1910,12 +2127,12 @@ export default function App() {
                     <div className="space-y-4">
                       <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                         <div>
-                          <h3 className="font-bold text-sm text-slate-800">ลิงก์ Google Drive สำหรับแนบใน Automail</h3>
-                          <p className="text-xs text-slate-500">จัดเก็บลิงก์เอกสารกลางที่จะนำไปแทนค่าในเทมเพลตอีเมล</p>
+                          <h3 className="font-bold text-sm text-slate-800">เอกสารแนบเมลแจ้งเตือน (Google Drive)</h3>
+                          <p className="text-xs text-slate-500">ทุกไฟล์ในรายการนี้ถูกแนบเป็นไฟล์ไปกับเมล R1 และ R2 ทุกฉบับ ต้องแชร์ไฟล์ให้อีเมล Service Account ถ้าดึงไฟล์ใดไม่ได้ ระบบจะไม่ส่งเมลรอบนั้น</p>
                         </div>
                         <button
                           onClick={() => setIsDriveModalOpen(true)}
-                          className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold cursor-pointer"
+                          className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold cursor-pointer"
                         >
                           + เพิ่มลิงก์ Drive
                         </button>
@@ -1934,7 +2151,7 @@ export default function App() {
                           {config.driveLinks.map((d, idx) => (
                             <tr key={idx} className="hover:bg-slate-50/50">
                               <td className="p-3 font-bold text-slate-800">{d.name}</td>
-                              <td className="p-3 text-blue-600 font-mono truncate max-w-xs">
+                              <td className="p-3 text-rose-600 font-mono truncate max-w-xs">
                                 <a href={d.url} target="_blank" rel="noreferrer" className="hover:underline">
                                   {d.url}
                                 </a>
@@ -1961,11 +2178,11 @@ export default function App() {
                       <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                         <div>
                           <h3 className="font-bold text-sm text-slate-800">จัดการสิทธิ์บุคคลที่เข้าถึงได้ (User Permissions)</h3>
-                          <p className="text-xs text-slate-500">กำหนดรายชื่ออีเมลและ Role (Admin / Viewer) ที่สามารถล็อกอินเข้าระบบได้</p>
+                          <p className="text-xs text-slate-500">กำหนดรายชื่ออีเมลและ Role (Admin / Staff / Viewer) ที่สามารถล็อกอินเข้าระบบได้</p>
                         </div>
                         <button
-                          onClick={() => setIsUserModalOpen(true)}
-                          className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold cursor-pointer"
+                          onClick={() => openUserModal(null)}
+                          className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold cursor-pointer"
                         >
                           + เพิ่มผู้ใช้งาน
                         </button>
@@ -1987,12 +2204,19 @@ export default function App() {
                               <td className="p-3 text-slate-700">{u.name}</td>
                               <td className="p-3">
                                 <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
-                                  u.role === 'Admin' ? 'bg-purple-50 text-purple-700 border border-purple-200' : 'bg-slate-100 text-slate-700'
+                                  u.role === 'Admin' ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                                  : u.role === 'Staff' ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-slate-100 text-slate-700'
                                 }`}>
                                   {u.role}
                                 </span>
                               </td>
-                              <td className="p-3 text-right">
+                              <td className="p-3 text-right space-x-3">
+                                <button
+                                  onClick={() => openUserModal(u)}
+                                  className="text-rose-600 hover:text-rose-800 font-semibold cursor-pointer"
+                                >
+                                  แก้ไข
+                                </button>
                                 {u.email !== currentUser.email && (
                                   <button
                                     onClick={() => handleDeleteUserAccess(u.email)}
@@ -2019,7 +2243,7 @@ export default function App() {
           {currentTab === 'activity-logs' && (
             <div className="space-y-5">
               <div>
-                <h2 className="text-2xl font-extrabold text-slate-800 tracking-tight">ประวัติการทำงาน (Activity Logs)</h2>
+                <h2 className="page-title">ประวัติการทำงาน (Activity Logs)</h2>
                 <p className="text-xs text-slate-500">Audit trail บันทึกทุกเหตุการณ์ การล็อกอิน การส่งต่ออีเมล และการปรับแต่งค่าในระบบ</p>
               </div>
 
@@ -2049,7 +2273,7 @@ export default function App() {
                           <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                             log.status === 'Success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
                             log.status === 'Warning' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
-                            'bg-blue-50 text-blue-700 border border-blue-200'
+                            'bg-rose-50 text-rose-700 border border-rose-200'
                           }`}>
                             {log.status}
                           </span>
@@ -2064,96 +2288,6 @@ export default function App() {
 
         </main>
       </div>
-
-      {/* ========================================================================= */}
-      {/* MODAL 1: EMAIL DETAIL VIEW / CHAIN MODAL (Page 3)                         */}
-      {/* ========================================================================= */}
-      {selectedEmail && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
-            {/* Header */}
-            <div className="p-5 border-b border-slate-200 flex items-center justify-between bg-slate-50">
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setSelectedEmail(null)}
-                  className="text-xs font-semibold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 px-3 py-1.5 rounded-xl shadow-2xs cursor-pointer"
-                >
-                  ← กลับ
-                </button>
-                <h3 className="font-bold text-slate-800 text-sm truncate max-w-lg">
-                  {selectedEmail.subject}
-                </h3>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className={`px-3 py-1 rounded-full text-xs font-bold ${
-                  isForwarded(selectedEmail.status) ? 'badge-sent' :
-                  selectedEmail.status === 'Needs Review' ? 'badge-review' : 'badge-pending'
-                }`}>
-                  {selectedEmail.status || '-'}
-                </span>
-                <button
-                  onClick={() => handleReForward(selectedEmail.id)}
-                  disabled={reforwarding}
-                  className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50"
-                >
-                  {reforwarding ? 'กำลังส่งต่อผ่าน n8n...' : 'ส่งต่ออีกครั้ง'}
-                </button>
-                <button
-                  onClick={() => setSelectedEmail(null)}
-                  className="w-8 h-8 rounded-xl text-slate-400 hover:text-slate-600 flex items-center justify-center cursor-pointer"
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-
-            {/* ข้อมูลจากแท็บ Email_Logs (แสดงเฉพาะคอลัมน์ที่มีในชีต) */}
-            <div className="p-6 flex-1 overflow-y-auto">
-              <dl className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 text-xs">
-                {[
-                  ["Log ID", selectedEmail.id],
-                  ["เวลาที่ส่ง", selectedEmail.timestamp],
-                  ["Customer ID", selectedEmail.customerId],
-                  ["ชื่อลูกค้า", selectedEmail.customerName],
-                  ["อีเมลผู้รับ", selectedEmail.recipientEmail],
-                  ["รอบการส่ง", selectedEmail.mailRound],
-                  ["หัวข้อ", selectedEmail.subject],
-                  ["สถานะการส่ง", selectedEmail.status],
-                  ["Message ID", selectedEmail.messageId],
-                  ["รายละเอียดข้อผิดพลาด", selectedEmail.errorDetail]
-                ].map(([label, value]) => (
-                  <div key={label} className="border-b border-slate-100 pb-2">
-                    <dt className="text-slate-400 font-medium">{label}</dt>
-                    <dd className="text-slate-800 font-mono break-all mt-0.5">{value || "-"}</dd>
-                  </div>
-                ))}
-              </dl>
-
-              <div className="mt-5">
-                <h4 className="text-xs font-bold text-slate-700 mb-2">ไฟล์แนบ ({(selectedEmail.attachments || []).length})</h4>
-                {(selectedEmail.attachments || []).length === 0 ? (
-                  <p className="text-xs text-slate-400">ไม่มีไฟล์แนบ</p>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    {selectedEmail.attachments.map((file, index) => (
-                      <div key={file.id || `${file.name}-${index}`} className="flex items-center justify-between gap-2 border border-slate-200 rounded-xl px-3 py-2 text-xs">
-                        <div className="min-w-0">
-                          <div className="font-semibold text-slate-800 truncate">{file.name}</div>
-                          <div className="text-[11px] text-slate-400">{file.mimeType}{file.size ? ` • ${file.size}` : ''}</div>
-                        </div>
-                        <div className="flex gap-1 shrink-0">
-                          <button onClick={() => setPreviewFile({ ...file, url: attachmentUrl(selectedEmail, file, index) })} className="px-2.5 py-1 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg font-semibold cursor-pointer">ดู</button>
-                          <a href={`${attachmentUrl(selectedEmail, file, index)}?download=1`} className="px-2.5 py-1 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg font-semibold">ดาวน์โหลด</a>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ========================================================================= */}
       {/* MODAL 2: CUSTOMER MODAL (Add / Edit)                                      */}
@@ -2177,7 +2311,7 @@ export default function App() {
                   value={customerForm.name}
                   onChange={(e) => setCustomerForm({ ...customerForm, name: e.target.value })}
                   placeholder="เช่น คุณสมชาย เจริญสุข หรือ บริษัท คู่ค้า จำกัด"
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500"
                 />
               </div>
 
@@ -2189,7 +2323,7 @@ export default function App() {
                   value={customerForm.email}
                   onChange={(e) => setCustomerForm({ ...customerForm, email: e.target.value })}
                   placeholder="customer@example.com"
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500"
                 />
               </div>
 
@@ -2200,7 +2334,7 @@ export default function App() {
                   value={customerForm.phone}
                   onChange={(e) => setCustomerForm({ ...customerForm, phone: e.target.value })}
                   placeholder="081-234-5678"
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500"
                 />
               </div>
 
@@ -2209,7 +2343,7 @@ export default function App() {
                 <select
                   value={customerForm.type || ''}
                   onChange={(e) => setCustomerForm({ ...customerForm, type: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500"
                 >
                   <option value="">— ไม่ระบุ —</option>
                   {/* คงค่าเดิมในชีตที่ไม่อยู่ในรายการไว้ ไม่ให้ถูกทับตอนบันทึก */}
@@ -2225,7 +2359,18 @@ export default function App() {
                   type="text"
                   value={customerForm.policy || ''}
                   onChange={(e) => setCustomerForm({ ...customerForm, policy: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">บริษัทประกันปัจจุบัน (Current Insurer)</label>
+                <input
+                  type="text"
+                  value={customerForm.currentInsurer || ''}
+                  onChange={(e) => setCustomerForm({ ...customerForm, currentInsurer: e.target.value })}
+                  placeholder="บริษัทที่ลูกค้าถือกรมธรรม์อยู่ตอนนี้ (ไม่บังคับ)"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500"
                 />
               </div>
 
@@ -2234,7 +2379,7 @@ export default function App() {
                 <select
                   value={customerForm.dataStatus || ''}
                   onChange={(e) => setCustomerForm({ ...customerForm, dataStatus: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500"
                 >
                   {!customerForm.dataStatus && <option value="">— ไม่ระบุ —</option>}
                   <option value="Valid">Valid (ส่งอีเมลแจ้งเตือนได้)</option>
@@ -2250,7 +2395,7 @@ export default function App() {
                   rows={2}
                   value={customerForm.notes || ''}
                   onChange={(e) => setCustomerForm({ ...customerForm, notes: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500"
                 />
               </div>
 
@@ -2260,7 +2405,7 @@ export default function App() {
                   <select
                     value={customerForm.customerStatus || ''}
                     onChange={(e) => setCustomerForm({ ...customerForm, customerStatus: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500"
                   >
                     <option value="">— ยังไม่ระบุ —</option>
                     {CUSTOMER_STATUSES.map(st => (
@@ -2284,7 +2429,7 @@ export default function App() {
                     type="date"
                     value={customerForm.expiry}
                     onChange={(e) => setCustomerForm({ ...customerForm, expiry: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500"
                   />
                 )}
               </div>
@@ -2299,7 +2444,7 @@ export default function App() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-xs cursor-pointer"
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold shadow-xs cursor-pointer"
                 >
                   บันทึกลง Google Sheet
                 </button>
@@ -2330,7 +2475,7 @@ export default function App() {
               ) : (
                 <div className="text-center text-xs text-slate-500 p-6">
                   <p className="mb-3">ไฟล์ชนิดนี้ ({previewFile.mimeType}) แสดงตัวอย่างในเว็บไม่ได้</p>
-                  <a href={`${previewFile.url}?download=1`} className="px-4 py-2 bg-blue-600 text-white rounded-lg font-bold">ดาวน์โหลดไฟล์</a>
+                  <a href={`${previewFile.url}?download=1`} className="px-4 py-2 bg-rose-600 text-white rounded-lg font-bold">ดาวน์โหลดไฟล์</a>
                 </div>
               )}
             </div>
@@ -2357,7 +2502,7 @@ export default function App() {
                   required
                   value={renewExpiry}
                   onChange={(e) => setRenewExpiry(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500"
                 />
               </div>
               <p className="text-[11px] text-amber-600 bg-amber-50 border border-amber-100 rounded-lg p-2">
@@ -2395,7 +2540,7 @@ export default function App() {
                 <h3 className="font-bold text-sm text-slate-800">
                   {templateForm.id ? `แก้ไขเทมเพลต: ${templateForm.name}` : 'สร้างเทมเพลตอีเมลใหม่'}
                 </h3>
-                <span className="text-[11px] bg-blue-100 text-blue-700 px-2.5 py-0.5 rounded-full font-bold">
+                <span className="text-[11px] bg-rose-100 text-rose-700 px-2.5 py-0.5 rounded-full font-bold">
                   {templateEditorMode === 'simple' ? 'โหมดแก้ไขแบบง่าย (No HTML)' : 'โหมดโค้ด HTML ขั้นสูง'}
                 </span>
               </div>
@@ -2412,7 +2557,7 @@ export default function App() {
                   value={templateForm.name}
                   onChange={(e) => setTemplateForm({ ...templateForm, name: e.target.value })}
                   placeholder="เช่น ส่งข้อมูลลูกค้า หรือ แจ้งเอกสารเพิ่ม"
-                  className="w-full px-3 py-1.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-1.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rose-500"
                 />
               </div>
 
@@ -2424,7 +2569,7 @@ export default function App() {
                   value={templateForm.subject}
                   onChange={(e) => setTemplateForm({ ...templateForm, subject: e.target.value })}
                   placeholder="เช่น ขอข้อมูลเพื่อดำเนินการทำประกัน [{{bookingNo}}]"
-                  className="w-full px-3 py-1.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-1.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rose-500"
                 />
               </div>
 
@@ -2433,7 +2578,7 @@ export default function App() {
                 <select
                   value={templateForm.recipientType}
                   onChange={(e) => setTemplateForm({ ...templateForm, recipientType: e.target.value })}
-                  className="w-full px-3 py-1.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-1.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-rose-500"
                 >
                   <option>ส่งถึงลูกค้า</option>
                   <option>ส่งถึงบริษัทประกัน</option>
@@ -2447,10 +2592,10 @@ export default function App() {
               <div className="flex items-center gap-1.5 bg-slate-200/70 p-1 rounded-xl">
                 <button
                   type="button"
-                  onClick={() => setTemplateEditorMode('simple')}
+                  onClick={() => templateEditorMode !== 'simple' && openSimpleEditor(templateForm.htmlContent)}
                   className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
                     templateEditorMode === 'simple'
-                      ? 'bg-white text-blue-600 shadow-xs'
+                      ? 'bg-white text-rose-600 shadow-xs'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
@@ -2462,7 +2607,7 @@ export default function App() {
                   onClick={() => setTemplateEditorMode('html')}
                   className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
                     templateEditorMode === 'html'
-                      ? 'bg-white text-blue-600 shadow-xs'
+                      ? 'bg-white text-rose-600 shadow-xs'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
@@ -2479,7 +2624,7 @@ export default function App() {
                     key={idx}
                     type="button"
                     onClick={() => applyTemplatePreset(preset)}
-                    className="px-2.5 py-1 bg-white border border-slate-200 hover:border-blue-400 hover:bg-blue-50 hover:text-blue-700 text-slate-700 rounded-lg text-[11px] font-medium transition-colors cursor-pointer"
+                    className="px-2.5 py-1 bg-white border border-slate-200 hover:border-rose-400 hover:bg-rose-50 hover:text-rose-700 text-slate-700 rounded-lg text-[11px] font-medium transition-colors cursor-pointer"
                   >
                     {preset.name}
                   </button>
@@ -2511,7 +2656,7 @@ export default function App() {
                         value={simpleTemplate.title}
                         onChange={(e) => handleSimpleChange('title', e.target.value)}
                         placeholder="เช่น แจ้งข้อมูลการทำประกันภัย"
-                        className="flex-1 px-3 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 font-semibold text-slate-800"
+                        className="flex-1 px-3 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 font-semibold text-slate-800"
                       />
                       {/* Color Palette */}
                       <div className="flex items-center gap-1 bg-white border border-slate-200 p-1.5 rounded-xl">
@@ -2544,7 +2689,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => handleSimpleChange('greeting', 'เรียน คุณ {{customerName}},')}
-                        className="text-[10px] text-blue-600 hover:underline font-semibold cursor-pointer"
+                        className="text-[10px] text-rose-600 hover:underline font-semibold cursor-pointer"
                       >
                         + ใส่ชื่อลูกค้าอัตโนมัติ
                       </button>
@@ -2554,7 +2699,7 @@ export default function App() {
                       value={simpleTemplate.greeting}
                       onChange={(e) => handleSimpleChange('greeting', e.target.value)}
                       placeholder="เช่น เรียน คุณ {{customerName}}, หรือ เรียน ท่านผู้เอาประกันภัย,"
-                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 font-medium"
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 font-medium"
                     />
                   </div>
 
@@ -2569,7 +2714,7 @@ export default function App() {
                       value={simpleTemplate.messageBody}
                       onChange={(e) => handleSimpleChange('messageBody', e.target.value)}
                       placeholder="พิมพ์ข้อความที่ต้องการแจ้งลูกค้าที่นี่..."
-                      className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 leading-relaxed text-slate-700 resize-none font-normal"
+                      className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 leading-relaxed text-slate-700 resize-none font-normal"
                     />
                   </div>
 
@@ -2584,9 +2729,9 @@ export default function App() {
                           type="checkbox"
                           checked={simpleTemplate.showBooking}
                           onChange={(e) => handleSimpleChange('showBooking', e.target.checked)}
-                          className="w-4 h-4 accent-blue-600 rounded"
+                          className="w-4 h-4 accent-rose-600 rounded"
                         />
-                        <span>📋 แสดงหมายเลขการจอง / กรมธรรม์: <code className="bg-slate-100 text-blue-600 px-1 py-0.5 rounded font-mono">{'{{bookingNo}}'}</code></span>
+                        <span>📋 แสดงหมายเลขการจอง / กรมธรรม์: <code className="bg-slate-100 text-rose-600 px-1 py-0.5 rounded font-mono">{'{{bookingNo}}'}</code></span>
                       </label>
 
                       <label className="flex items-center gap-2 cursor-pointer text-slate-700">
@@ -2594,9 +2739,9 @@ export default function App() {
                           type="checkbox"
                           checked={simpleTemplate.showExpiry}
                           onChange={(e) => handleSimpleChange('showExpiry', e.target.checked)}
-                          className="w-4 h-4 accent-blue-600 rounded"
+                          className="w-4 h-4 accent-rose-600 rounded"
                         />
-                        <span>📅 แสดงวันหมดอายุความคุ้มครอง: <code className="bg-slate-100 text-blue-600 px-1 py-0.5 rounded font-mono">{'{{policyExpiry}}'}</code></span>
+                        <span>📅 แสดงวันหมดอายุความคุ้มครอง: <code className="bg-slate-100 text-rose-600 px-1 py-0.5 rounded font-mono">{'{{policyExpiry}}'}</code></span>
                       </label>
 
                       <label className="flex items-center gap-2 cursor-pointer text-slate-700">
@@ -2604,9 +2749,9 @@ export default function App() {
                           type="checkbox"
                           checked={simpleTemplate.showDrive}
                           onChange={(e) => handleSimpleChange('showDrive', e.target.checked)}
-                          className="w-4 h-4 accent-blue-600 rounded"
+                          className="w-4 h-4 accent-rose-600 rounded"
                         />
-                        <span>📎 แสดงลิงก์เอกสารจาก Google Drive: <code className="bg-slate-100 text-blue-600 px-1 py-0.5 rounded font-mono">{'{{driveLinks}}'}</code></span>
+                        <span>📎 แสดงชื่อไฟล์เอกสารที่แนบไปกับเมล: <code className="bg-slate-100 text-rose-600 px-1 py-0.5 rounded font-mono">{'{{driveLinks}}'}</code></span>
                       </label>
                     </div>
                   </div>
@@ -2621,7 +2766,7 @@ export default function App() {
                       value={simpleTemplate.footer}
                       onChange={(e) => handleSimpleChange('footer', e.target.value)}
                       placeholder="เช่น AutoMail Insurance Automation System • ติดต่อฝ่ายบริการลูกค้า"
-                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 text-slate-600"
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 text-slate-600"
                     />
                   </div>
 
@@ -2631,30 +2776,38 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => insertPlaceholder('{{customerName}}')}
-                      className="px-2 py-0.5 bg-white border border-slate-300 rounded-md text-[11px] font-mono hover:bg-blue-50 hover:text-blue-600 cursor-pointer"
+                      className="px-2 py-0.5 bg-white border border-slate-300 rounded-md text-[11px] font-mono hover:bg-rose-50 hover:text-rose-600 cursor-pointer"
                     >
                       + {'{{customerName}}'}
                     </button>
                     <button
                       type="button"
                       onClick={() => insertPlaceholder('{{bookingNo}}')}
-                      className="px-2 py-0.5 bg-white border border-slate-300 rounded-md text-[11px] font-mono hover:bg-blue-50 hover:text-blue-600 cursor-pointer"
+                      className="px-2 py-0.5 bg-white border border-slate-300 rounded-md text-[11px] font-mono hover:bg-rose-50 hover:text-rose-600 cursor-pointer"
                     >
                       + {'{{bookingNo}}'}
                     </button>
                     <button
                       type="button"
                       onClick={() => insertPlaceholder('{{policyExpiry}}')}
-                      className="px-2 py-0.5 bg-white border border-slate-300 rounded-md text-[11px] font-mono hover:bg-blue-50 hover:text-blue-600 cursor-pointer"
+                      className="px-2 py-0.5 bg-white border border-slate-300 rounded-md text-[11px] font-mono hover:bg-rose-50 hover:text-rose-600 cursor-pointer"
                     >
                       + {'{{policyExpiry}}'}
                     </button>
                     <button
                       type="button"
                       onClick={() => insertPlaceholder('{{driveLinks}}')}
-                      className="px-2 py-0.5 bg-white border border-slate-300 rounded-md text-[11px] font-mono hover:bg-blue-50 hover:text-blue-600 cursor-pointer"
+                      className="px-2 py-0.5 bg-white border border-slate-300 rounded-md text-[11px] font-mono hover:bg-rose-50 hover:text-rose-600 cursor-pointer"
                     >
                       + {'{{driveLinks}}'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => insertPlaceholder('{{daysRemaining}}')}
+                      title="จำนวนวันที่เหลือก่อนกรมธรรม์หมดอายุ ณ วันที่ส่ง"
+                      className="px-2 py-0.5 bg-white border border-slate-300 rounded-md text-[11px] font-mono hover:bg-rose-50 hover:text-rose-600 cursor-pointer"
+                    >
+                      + {'{{daysRemaining}}'}
                     </button>
                   </div>
                 </div>
@@ -2669,37 +2822,45 @@ export default function App() {
                     value={templateForm.htmlContent}
                     onChange={(e) => setTemplateForm({ ...templateForm, htmlContent: e.target.value })}
                     placeholder="เขียนโค้ด HTML ที่นี่..."
-                    className="flex-1 w-full bg-slate-950 text-emerald-300 font-mono text-xs p-3 rounded-xl border border-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none"
+                    className="flex-1 w-full bg-slate-950 text-emerald-300 font-mono text-xs p-3 rounded-xl border border-slate-800 focus:outline-none focus:ring-1 focus:ring-rose-500 resize-none"
                   />
                   <div className="pt-2 flex items-center gap-1.5 flex-wrap">
                     <span className="text-[10px] text-slate-400 font-mono">แทรกตัวแปร:</span>
                     <button
                       type="button"
                       onClick={() => insertPlaceholder('{{customerName}}')}
-                      className="px-2 py-0.5 bg-slate-800 text-slate-300 rounded text-[10px] font-mono hover:bg-blue-600 hover:text-white cursor-pointer"
+                      className="px-2 py-0.5 bg-slate-800 text-slate-300 rounded text-[10px] font-mono hover:bg-rose-600 hover:text-white cursor-pointer"
                     >
                       + {'{{customerName}}'}
                     </button>
                     <button
                       type="button"
                       onClick={() => insertPlaceholder('{{bookingNo}}')}
-                      className="px-2 py-0.5 bg-slate-800 text-slate-300 rounded text-[10px] font-mono hover:bg-blue-600 hover:text-white cursor-pointer"
+                      className="px-2 py-0.5 bg-slate-800 text-slate-300 rounded text-[10px] font-mono hover:bg-rose-600 hover:text-white cursor-pointer"
                     >
                       + {'{{bookingNo}}'}
                     </button>
                     <button
                       type="button"
                       onClick={() => insertPlaceholder('{{policyExpiry}}')}
-                      className="px-2 py-0.5 bg-slate-800 text-slate-300 rounded text-[10px] font-mono hover:bg-blue-600 hover:text-white cursor-pointer"
+                      className="px-2 py-0.5 bg-slate-800 text-slate-300 rounded text-[10px] font-mono hover:bg-rose-600 hover:text-white cursor-pointer"
                     >
                       + {'{{policyExpiry}}'}
                     </button>
                     <button
                       type="button"
                       onClick={() => insertPlaceholder('{{driveLinks}}')}
-                      className="px-2 py-0.5 bg-slate-800 text-slate-300 rounded text-[10px] font-mono hover:bg-blue-600 hover:text-white cursor-pointer"
+                      className="px-2 py-0.5 bg-slate-800 text-slate-300 rounded text-[10px] font-mono hover:bg-rose-600 hover:text-white cursor-pointer"
                     >
                       + {'{{driveLinks}}'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => insertPlaceholder('{{daysRemaining}}')}
+                      title="จำนวนวันที่เหลือก่อนกรมธรรม์หมดอายุ ณ วันที่ส่ง"
+                      className="px-2 py-0.5 bg-slate-800 text-slate-300 rounded text-[10px] font-mono hover:bg-rose-600 hover:text-white cursor-pointer"
+                    >
+                      + {'{{daysRemaining}}'}
                     </button>
                   </div>
                 </div>
@@ -2723,7 +2884,8 @@ export default function App() {
                       .replace(/{{customerName}}/g, 'คุณสมชาย เจริญสุข')
                       .replace(/{{bookingNo}}/g, 'BK-2026-001')
                       .replace(/{{policyExpiry}}/g, '31/12/2026')
-                      .replace(/{{driveLinks}}/g, '<a href="https://drive.google.com" target="_blank" style="color: #2563eb; text-decoration: underline; font-weight: bold;">คลิกเปิดดูเอกสารแบบฟอร์ม (Google Drive)</a>')
+                      .replace(/{{daysRemaining}}/g, '172')
+                      .replace(/{{driveLinks}}/g, (config.driveLinks.map(d => d.name).join(', ') || 'แบบฟอร์ม.pdf') + ' (แนบเป็นไฟล์)')
                   }}
                 />
               </div>
@@ -2745,7 +2907,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={handleSaveTemplate}
-                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer"
+                  className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer"
                 >
                   บันทึกเทมเพลต
                 </button>
@@ -2761,18 +2923,20 @@ export default function App() {
       {isUserModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl shadow-2xl max-w-sm w-full p-6 border border-slate-200">
-            <h3 className="font-bold text-sm text-slate-800 mb-4">เพิ่มสิทธิ์ผู้ใช้งานใหม่ (Sheet config)</h3>
+            <h3 className="font-bold text-sm text-slate-800 mb-4">{editingUserEmail ? 'แก้ไขสิทธิ์ผู้ใช้งาน (Sheet config)' : 'เพิ่มสิทธิ์ผู้ใช้งานใหม่ (Sheet config)'}</h3>
             <form onSubmit={handleAddUserAccess} className="space-y-3 text-xs">
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">อีเมล Google *</label>
+                <label className="block font-semibold text-slate-700 mb-1">อีเมล *</label>
                 <input
                   type="email"
                   required
+                  readOnly={!!editingUserEmail}
                   value={userForm.email}
                   onChange={(e) => setUserForm({ ...userForm, email: e.target.value })}
                   placeholder="user@example.com"
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 read-only:bg-slate-100 read-only:text-slate-500"
                 />
+                {editingUserEmail && <p className="text-[11px] text-slate-500 mt-1">อีเมลแก้ไม่ได้ ถ้าต้องการเปลี่ยนอีเมล ให้ลบสิทธิ์แล้วเพิ่มใหม่</p>}
               </div>
 
               <div>
@@ -2783,7 +2947,7 @@ export default function App() {
                   value={userForm.name}
                   onChange={(e) => setUserForm({ ...userForm, name: e.target.value })}
                   placeholder="ชื่อ-นามสกุล หรือตำแหน่ง"
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500"
                 />
               </div>
 
@@ -2791,12 +2955,17 @@ export default function App() {
                 <label className="block font-semibold text-slate-700 mb-1">ระดับสิทธิ์ (Role)</label>
                 <select
                   value={userForm.role}
+                  disabled={editingUserEmail === currentUser.email}
                   onChange={(e) => setUserForm({ ...userForm, role: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 disabled:bg-slate-100 disabled:text-slate-500"
                 >
                   <option value="Viewer">Viewer (ดูข้อมูลได้อย่างเดียว)</option>
+                  <option value="Staff">Staff (ทำงานประจำวันได้ ยกเว้นตั้งค่าและเทมเพลต)</option>
                   <option value="Admin">Admin (จัดการระบบและสิทธิ์ได้)</option>
                 </select>
+                {editingUserEmail === currentUser.email && (
+                  <p className="text-[11px] text-slate-500 mt-1">เปลี่ยน Role ของตัวเองไม่ได้ เพื่อกันไม่ให้ระบบไม่เหลือ Admin ให้ Admin คนอื่นเปลี่ยนให้</p>
+                )}
               </div>
 
               <div className="pt-3 flex justify-end gap-2 border-t border-slate-100">
@@ -2809,9 +2978,9 @@ export default function App() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold cursor-pointer"
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer"
                 >
-                  เพิ่มสิทธิ์
+                  {editingUserEmail ? 'บันทึกการแก้ไข' : 'เพิ่มสิทธิ์'}
                 </button>
               </div>
             </form>
@@ -2835,7 +3004,7 @@ export default function App() {
                   value={driveForm.name}
                   onChange={(e) => setDriveForm({ ...driveForm, name: e.target.value })}
                   placeholder="เช่น Policy_Form.docx"
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500"
                 />
               </div>
 
@@ -2847,7 +3016,7 @@ export default function App() {
                   value={driveForm.url}
                   onChange={(e) => setDriveForm({ ...driveForm, url: e.target.value })}
                   placeholder="https://drive.google.com/file/d/..."
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 font-mono"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500 font-mono"
                 />
               </div>
 
@@ -2858,7 +3027,7 @@ export default function App() {
                   value={driveForm.description}
                   onChange={(e) => setDriveForm({ ...driveForm, description: e.target.value })}
                   placeholder="เช่น แบบฟอร์มขอทำประกันฉบับปี 2026"
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:ring-2 focus:ring-rose-500"
                 />
               </div>
 
@@ -2872,7 +3041,7 @@ export default function App() {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold cursor-pointer"
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold cursor-pointer"
                 >
                   บันทึกลิงก์
                 </button>

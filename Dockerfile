@@ -8,6 +8,6 @@ RUN mkdir -p /home/node/workflows && chown -R node:node /home/node/workflows
 
 # ใส่เฉพาะ workflow ที่ใช้งานจริง ไฟล์อื่นในโฟลเดอร์ workflows/ เป็นเวอร์ชันเก่าที่ไม่ควร import เข้า production
 # ทั้งสองไฟล์มี id คงที่ import ซ้ำทุก deploy จะอัปเดต workflow เดิม ไม่สร้างซ้ำ
-COPY --chown=node:node workflows/c7AnideudYIbfvmK.json workflows/02-AutoMail-Inbound-Router.json /home/node/workflows/
+COPY --chown=node:node workflows/AutoMailOutbound.json workflows/R3pXov64UiK0AkDL.json /home/node/workflows/
 
 USER node
