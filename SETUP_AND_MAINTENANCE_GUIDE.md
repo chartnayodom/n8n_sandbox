@@ -1,172 +1,271 @@
-# คู่มือการติดตั้ง ย้ายเครื่อง และดูแลรักษาระบบ (Setup, Migration & Maintenance Guide)
-**โครงการ:** n8n Auto-Email & Google Sheets / SQLite Automation
+# คู่มือการติดตั้ง Deploy และดูแลรักษาระบบ (Setup, Deploy & Maintenance Guide)
+**โครงการ:** AutoMail Insurance — n8n + เว็บจัดการระบบ (sheets-app) + Google Sheets
+
+> อัปเดตให้ตรงกับ source code ล่าสุด: 2026-11-11 (อ้างอิง `Dockerfile`, `docker-compose.yml`, `Jenkinsfile`, `.env.example`, `sheets-app/`, `workflows/`)
 
 ---
 
-## 📌 สารบัญ (Table of Contents)
-1. [ภาพรวมของระบบและ Workflows](#1-ภาพรวมของระบบและ-workflows)
-2. [ขั้นตอนการ Setup / Clone ลงเครื่องใหม่แบบ Step-by-Step](#2-ขั้นตอนการ-setup--clone-ลงเครื่องใหม่)
-3. [การจัดการความปลอดภัยและ Credentials (กุญแจเข้ารหัส)](#3-การจัดการ-credentials-และกุญแจเข้ารหัส)
-4. [การจัดการฐานข้อมูล (SQLite vs n8n Data Table)](#4-การจัดการฐานข้อมูล-sqlite-vs-n8n-data-table)
-5. [ปัญหาที่พบบ่อยและวิธีแก้ไข (Troubleshooting & Gotchas)](#5-ปัญหาที่พบบ่อยและวิธีแก้ไข)
-6. [รวมคำสั่ง CLI สำคัญ (Cheat Sheet)](#6-รวมคำสั่ง-cli-สำคัญ-cheat-sheet)
+## 📌 สารบัญ
+1. [ภาพรวมของระบบ](#1-ภาพรวมของระบบ)
+2. [Deploy ด้วย Docker Compose (Production)](#2-deploy-ด้วย-docker-compose-production)
+3. [Deploy ผ่าน Jenkins (CI/CD)](#3-deploy-ผ่าน-jenkins-cicd)
+4. [รันบนเครื่องสำหรับพัฒนา (Local Development)](#4-รันบนเครื่องสำหรับพัฒนา-local-development)
+5. [Credentials และกุญแจเข้ารหัส](#5-credentials-และกุญแจเข้ารหัส)
+6. [ตัวแปร Environment ทั้งหมด](#6-ตัวแปร-environment-ทั้งหมด)
+7. [ปัญหาที่พบบ่อยและวิธีแก้ไข](#7-ปัญหาที่พบบ่อยและวิธีแก้ไข)
+8. [รวมคำสั่งสำคัญ (Cheat Sheet)](#8-รวมคำสั่งสำคัญ-cheat-sheet)
 
 ---
 
-## 1. ภาพรวมของระบบและ Workflows
+## 1. ภาพรวมของระบบ
 
-ระบบประกอบด้วย 2 Workflows หลักที่ทำงานร่วมกัน:
+```text
+                ┌──────────────────────── docker compose ────────────────────────┐
+ เบราว์เซอร์ ──▶ │ web (automail_web) :5000                                        │
+                │   Express เสิร์ฟหน้าเว็บ (React build) + /api                     │
+                │   └─ POST http://n8n:5678/webhook/re-forward ──┐                 │
+                │ n8n (n8n_auto_email) :5678  ◀──────────────────┘                 │
+                │   workflow 01 Outbound R1/R2 (ทุก 24 ชม.)                         │
+                │   workflow 02 Inbound Router (IMAP) + Webhook re-forward         │
+                └─────────────────────────────────────────────────────────────────┘
+                       │ Google Sheets / Drive API (Service Account)   │ SMTP / IMAP
+                       ▼                                                ▼
+              Google Spreadsheet (Master_Data, Email_Logs,       กล่องจดหมายกลาง
+              Call_Logs, Templates, config)
+```
 
-### 📤 Workflow 1: Outbound Auto Send Email & Summary Report
-* **ไฟล์:** `workflows/AutoMailOutbound.json`
-* **การทำงาน:**
-  1. ดึงข้อมูลรายการจาก **Google Sheets (Service Account)** หรือ **SQLite / Data Table**
-  2. กรองข้อมูลเฉพาะรายการที่ครบกำหนดล่วงหน้า 3 เดือน (`due_date_to` / `insurance_date_to`) และสถานะยังไม่เคยส่ง
-  3. **ดึง Template อีเมลจากชีต `Templates`** (เลือกตามรอบ R1/R2 ด้วยชื่อ — รูปแบบชีตและตัวแปรดู [docs/PROJECT_HANDOVER_AND_MIGRATION_GUIDE.md](docs/PROJECT_HANDOVER_AND_MIGRATION_GUIDE.md) หัวข้อ 3.3) ถ้าไม่พบ template workflow จะหยุดและแจ้ง error
-  4. **Parallel Download:** ดาวน์โหลดเอกสารแนบคู่ขนานจาก Google Drive 2 ไฟล์ และส่งต่อ Binary Data เข้าสู่ลูป
-  5. วนลูปส่งอีเมลรายบุคคลผ่าน **SMTP** พร้อมสร้าง Unique `Message-ID` (`mail_id`) สำหรับใช้อ้างอิงการตอบกลับ
-  6. **Error Branching:**
-     * **สำเร็จ (4.3.T):** อัปเดตสถานะเป็น `complete` / `สำเร็จ` และบันทึก `mail_id`
-     * **ไม่สำเร็จ (4.3.F):** อัปเดตสถานะเป็น `failed` และบันทึกข้อความผิดพลาด
-  7. **Summary Report:** รวมสถิติการส่งรอบนั้น แล้วส่งอีเมลสรุปรายงานไปยังผู้ดูแลระบบ (Admin)
+| ส่วน | ไฟล์ | หน้าที่ |
+| :--- | :--- | :--- |
+| Workflow 01 | `workflows/AutoMailOutbound.json` (id `AutoMailOutbound`) | Schedule ทุก 24 ชม. + Manual Trigger: อ่าน `Master_Data` และชีต `config` เลือกลูกค้าที่เข้ารอบ R1/R2 (`r1_days_before` / `r2_days_before`) ส่งอีเมลจาก template ในชีต `Templates` พร้อมไฟล์แนบจากหมวด `DRIVE_LINK` อัปเดตสถานะกลับ `Master_Data`, เขียน `Email_Logs` และส่งรายงานสรุปไป `admin_report_email` |
+| Workflow 02 | `workflows/R3pXov64UiK0AkDL.json` (id `R3pXov64UiK0AkDL`) | **Flow A** IMAP Trigger (UNSEEN): ส่งต่อไป `insurance_email` เมื่อผู้ส่งอยู่ใน `Master_Data` และเป็นการตอบกลับ/หัวข้อมี prefix นอกนั้นบันทึก `Needs Review` / **Flow B** Webhook `POST /webhook/re-forward` สำหรับปุ่ม "ส่งต่ออีกครั้ง" บนเว็บ |
+| เว็บ | `sheets-app/` (`server/` Express, `client/` React + Vite) | หน้าจัดการ Master Data, Inbox, Needs Review, Template, Settings, ติดตามลูกค้า เปิดไฟล์แนบจากกล่องจดหมายผ่าน IMAP ด้วย Message-ID |
 
-### 📥 Workflow 2: Inbound Monitor & Auto-Forward (Listener Flow)
-* **ไฟล์:** `workflows/a14U6Ep5Yxt4eZH1.json`
-* **การทำงาน:**
-  1. ดักจับอีเมลใหม่ใน `INBOX` ตลอดเวลาผ่าน **IMAP Trigger**
-  2. กรองเงื่อนไข 2 ข้อ (เข้าข้อใดข้อหนึ่ง):
-     * **เงื่อนไข A:** มี Subject Prefix ที่กำหนด เช่น `[PorInsurance]`, `[แจ้งเตือนครบกำหนด]`
-     * **เงื่อนไข B:** เป็นอีเมลตอบกลับ (Reply) จาก `mail_id` ที่ระบบเคยส่งออกไป
-  3. ตรวจสอบข้อมูลในฐานข้อมูล SQLite / Data Table เพื่อดึงชื่อและสถานะกรมธรรม์ของลูกค้า
-  4. ทำการ **Forward อีเมล** พร้อมแนบข้อมูลสรุปของลูกค้า และแนบไฟล์เดิมของผู้ส่ง (ถ้ามี) ไปยังอีเมลปลายทาง
+> รายละเอียดเงื่อนไขของแต่ละ workflow และหัวคอลัมน์ของชีตดู [docs/PROJECT_HANDOVER_AND_MIGRATION_GUIDE.md](docs/PROJECT_HANDOVER_AND_MIGRATION_GUIDE.md) หัวข้อ 3.3–3.4
+>
+> ไฟล์ที่ขึ้นต้นด้วย `UNUSED_` ในโฟลเดอร์ `workflows/` เป็นเวอร์ชันเก่า (ใช้ SQLite / n8n Data Table) **ห้าม import เข้า production** — `Dockerfile` คัดลอกเข้า image เฉพาะ 2 ไฟล์ข้างบน
 
 ---
 
-## 2. ขั้นตอนการ Setup / Clone ลงเครื่องใหม่
+## 2. Deploy ด้วย Docker Compose (Production)
 
-เมื่อต้องการนำโค้ดไปรันบน PC เครื่องอื่น ให้ปฏิบัติตามลำดับดังนี้:
+### 2.1 สิ่งที่ต้องมีบน Host Server
+* Docker Engine + **Docker Compose v2.24 ขึ้นไป** (`docker-compose.yml` ใช้ `env_file` แบบ `path` / `required: false` ซึ่งรุ่นเก่ากว่านี้ไม่รองรับ)
+* พอร์ตว่าง `5678` (n8n) และ `5000` (เว็บ) หรือเปลี่ยนได้ด้วย `N8N_PORT` / `WEB_PORT`
 
-### ขั้นตอนที่ 1: เตรียมสภาพแวดล้อม (Prerequisites)
-* ติดตั้ง **Node.js** (เวอร์ชันแนะนำ: v20.19 – v24.x)
-* ตรวจสอบความพร้อมผ่าน Terminal:
-  ```bash
-  node -v
-  npm -v
-  ```
-* ติดตั้ง n8n แบบ Global (ถ้ายังไม่มี):
-  ```bash
-  npm install -g n8n
-  ```
+### 2.2 เตรียมไฟล์ค่าลับ 2 ไฟล์ (ไม่อยู่ใน Git)
 
-### ขั้นตอนที่ 2: Clone Repository
+**ไฟล์ที่ 1: `.env` ที่โฟลเดอร์ราก** (ใช้กับ service `n8n`)
 ```bash
-git clone https://github.com/chartnayodom/n8n_sandbox.git
-cd n8n_sandbox
+cp .env.example .env
 ```
+แก้อย่างน้อย:
+* `N8N_ENCRYPTION_KEY` = สตริงสุ่มยาว (เช่น `openssl rand -hex 32`) **ต้องคงค่าเดิมทุกครั้งที่ deploy** ไม่งั้น credential ใน n8n จะถอดรหัสไม่ได้
+* `WEBHOOK_URL` = URL ที่ภายนอกใช้เรียก n8n (เช่น `https://n8n.example.com/`)
+* `N8N_HOST`, `N8N_PROTOCOL` ให้ตรงกับโดเมนจริง
 
-### ขั้นตอนที่ 3: สร้างและเตรียมฐานข้อมูล SQLite
-รันคำสั่ง Node เพื่อสร้างตาราง `mail_records` ในโฟลเดอร์ `n8n_data`:
+**ไฟล์ที่ 2: `sheets-app/server/.env`** (ใช้กับ service `web`)
 ```bash
-node --experimental-sqlite ./scripts/init-sqlite.js
+cp sheets-app/server/.env.example sheets-app/server/.env
 ```
-*(ระบบจะสร้างไฟล์ `n8n_data/automail.sqlite` พร้อม Seed ข้อมูลทดสอบ 2 แถวให้ทันที)*
+กรอก `SPREADSHEET_ID`, `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_PRIVATE_KEY` (คง `\n` และเครื่องหมายคำพูดไว้), `IMAP_HOST` / `IMAP_PORT` / `IMAP_USER` / `IMAP_PASSWORD`
+* ค่า `PORT` ในไฟล์นี้ **ไม่มีผลใน Docker** เพราะ `docker-compose.yml` บังคับ `PORT=5000`
+* ถ้าไม่มีไฟล์นี้ container `web` ยังเริ่มได้ แต่จะอยู่ใน **Demo Mode** (ต่อ Google Sheets ไม่ได้) ตรวจได้ที่ `GET /api/status` → `"mode": "live"` / `"mock"`
 
-### ขั้นตอนที่ 4: ตั้งค่า Environment Variables (`.env`)
-คัดลอกไฟล์แม่แบบและใส่กุญแจเข้ารหัส:
-```powershell
-Copy-Item .env.example .env
+### 2.3 Build และรัน
+```bash
+mkdir -p n8n_data local-files
+sudo chown -R 1000:1000 n8n_data local-files   # Linux: ให้ user node (UID 1000) ใน container เขียนได้
+docker compose up -d --build
 ```
-เปิดไฟล์ `.env` และระบุ `N8N_ENCRYPTION_KEY` ให้ตรงกับเครื่องต้นทาง (ถ้าต้องการใช้ไฟล์ `credentials.json` เดิม)
+ผลลัพธ์:
+| Service | Container | Image | พอร์ต | Volume |
+| :--- | :--- | :--- | :--- | :--- |
+| `n8n` | `n8n_auto_email` | `custom-n8n-email-automation:latest` (n8n **2.8.4** — เปลี่ยนด้วย `--build-arg N8N_VERSION=...`) | `${N8N_PORT:-5678}` | `./n8n_data` → `/home/node/.n8n`, `./local-files` → `/files` |
+| `web` | `automail_web` | `automail-insurance-web:latest` (node:22-alpine, multi-stage build) | `${WEB_PORT:-5000}` | ไม่มี (มี HEALTHCHECK ที่ `/api/status`) |
 
-### ขั้นตอนที่ 5: นำเข้า Workflows สู่ n8n
-```powershell
-n8n import:workflow --separate --input=./workflows/
+### 2.4 ตั้งค่าครั้งแรกบน instance ใหม่ (ทำครั้งเดียว)
+1. เปิด `http://<host>:5678` สร้างบัญชีเจ้าของ (owner) — **ต้องทำก่อน** CLI import ถึงจะทำงาน
+2. Import workflow ที่อยู่ใน image แล้ว:
+   ```bash
+   docker exec -u node n8n_auto_email n8n import:workflow --separate --input=/home/node/workflows/
+   docker restart n8n_auto_email
+   ```
+   ทั้งสองไฟล์มี id คงที่ import ซ้ำจะอัปเดต workflow เดิม ไม่สร้างใหม่
+3. สร้าง credential 3 ตัวใน n8n (ชื่อต้องตรงกับใน workflow ถ้าไม่ตรงให้เลือกใหม่ในทุก node ที่ขึ้นเตือน):
+   | ชื่อ credential | ชนิด | ใช้ใน |
+   | :--- | :--- | :--- |
+   | `Google Service Account account` | Google API (Service Account) | Google Sheets / Drive ทั้ง 2 workflow |
+   | `SMTP account` | SMTP (Gmail: `smtp.gmail.com` 465 SSL + App Password) | ส่งอีเมล ทั้ง 2 workflow |
+   | `IMAP account` | IMAP (Gmail: `imap.gmail.com` 993 SSL + App Password) | workflow 02 |
+4. ตรวจ Spreadsheet ID ในทุก node Google Sheets (workflow 01: 7 node, workflow 02: 8 node) ให้ตรงกับ Sheet ที่ใช้งานจริง
+5. ในชีต `config` ตั้ง `n8n_webhook_url` = `http://n8n:5678/webhook/re-forward` (เว็บเรียก n8n ผ่าน network ภายในของ compose)
+6. ทดสอบด้วยโหมดทดสอบ (`test_recipient_email` / `test_forward_email` ใน node `Global Config` และ `Re-forward Config`) แล้วค่อย **เปิด Active** ทั้ง 2 workflow — workflow ที่ import มาจะปิดอยู่เสมอ (`active: false`) เปิดได้จาก UI หรือ `n8n publish:workflow --id=<WORKFLOW_ID>`
+
+> ขั้นตอนเตรียมบัญชี Google Cloud / Sheet / อีเมลกลางของลูกค้า ดู [docs/CUSTOMER_HANDOVER_CHECKLIST.md](docs/CUSTOMER_HANDOVER_CHECKLIST.md)
+
+### 2.5 อัปเดตเวอร์ชัน (Redeploy)
+```bash
+git pull
+docker compose up -d --build
+docker exec -u node n8n_auto_email n8n import:workflow --separate --input=/home/node/workflows/
+docker restart n8n_auto_email
 ```
-
-### ขั้นตอนที่ 6: นำเข้าหรือตั้งค่า Credentials
-* **กรณีมีไฟล์ `credentials.json` จากเครื่องเดิม:**
-  ```powershell
-  n8n import:credentials --input=./credentials.json
-  ```
-* **กรณีต้องการตั้งค่าใหม่บน UI:**
-  เปิด n8n (`n8n start`) แล้วเข้าไปผูกบัญชีใน UI:
-  * Google Service Account (`apU1LNQcR7cMOpnJ`)
-  * SMTP Account (`tX1RzY0kvRotVojr`)
-  * IMAP Account (`2HMSsaztmuB5CTzy`)
+ข้อมูลใน `n8n_data/` (credential, ประวัติการรัน, สถานะ Active) คงอยู่ข้ามการ redeploy
 
 ---
 
-## 3. การจัดการ Credentials และกุญแจเข้ารหัส
+## 3. Deploy ผ่าน Jenkins (CI/CD)
+
+`Jenkinsfile` ทำงานตามลำดับ (รองรับทั้ง agent Linux `sh` และ Windows `bat`):
+
+| Stage | ทำอะไร |
+| :--- | :--- |
+| Checkout Source | `checkout scm` |
+| Validate Workflow JSONs | สร้าง/แสดงรายการ `./workflows` |
+| prepare Environment & Volumes | เขียน `.env` ที่ราก **เฉพาะ 4 ค่า**: `N8N_PORT=5678`, `GENERIC_TIMEZONE`, `TZ` (`Asia/Bangkok`), `N8N_ENCRYPTION_KEY` แล้วสร้าง `n8n_data/`, `local-files/` (Linux: `chown 1000:1000`) |
+| Build & Deploy Docker Container | `docker compose up -d --build` (ทั้ง service `n8n` และ `web`) |
+| Import Workflows & Restart Service | รอ 5 วินาที → `n8n import:workflow --separate --input=/home/node/workflows/` → `docker restart n8n_auto_email` |
+| post / always | ลบ `.env` ที่รากออกจาก workspace |
+
+**Jenkins Credentials ที่ต้องมี:** `N8N_ENCRYPTION_KEY` (Secret text)
 
 > [!WARNING]
-> **ความปลอดภัยสำคัญสูงสุด:** ห้ามนำไฟล์ `credentials.json` หรือไฟล์ `.env` ที่มีรหัสผ่านจริง commit ขึ้น Git เด็ดขาด (ระบบได้เพิ่มไว้ใน `.gitignore` เรียบร้อยแล้ว)
+> **ข้อจำกัดของ Jenkinsfile ปัจจุบัน**
+> * ไม่ได้สร้าง `sheets-app/server/.env` → service `web` จะรันใน Demo Mode จนกว่าจะวางไฟล์นี้ไว้ใน Jenkins workspace เอง (ไฟล์นี้ไม่ถูกลบโดย `cleanWs` เพราะ pattern ลบเฉพาะ `.env` ที่ราก)
+> * `.env` ที่ Jenkins เขียนไม่มี `WEBHOOK_URL`, `N8N_HOST`, `N8N_PROTOCOL`, `WEB_PORT` → ใช้ค่า default (`5000` สำหรับเว็บ, webhook URL ของ n8n เป็น localhost) ถ้าต้องใช้ค่าอื่นต้องเพิ่มใน stage `prepare Environment & Volumes`
+> * ครั้งแรกบน instance ใหม่ stage import อาจล้มเหลวจนกว่าจะสร้างบัญชี owner (หัวข้อ 2.4 ข้อ 1)
 
-* **กุญแจเข้ารหัส (`N8N_ENCRYPTION_KEY`):**  
-  n8n จะใช้กุญแจนี้ในการเข้ารหัสรหัสผ่านทุกตัวในระบบ หากย้ายเครื่องและต้องการนำเข้าไฟล์ `credentials.json` ข้ามเครื่อง จะต้องใช้ค่า `N8N_ENCRYPTION_KEY` เดียวกันในไฟล์ `.env` เท่านั้น
-* **การสำรอง Credentials ออกมาใช้งาน:**
-  ```powershell
-  n8n export:credentials --all --output=./credentials.json
+---
+
+## 4. รันบนเครื่องสำหรับพัฒนา (Local Development)
+
+### 4.1 Prerequisites
+* **Node.js 20.19 – 24.x** (`package.json` → `engines`) แนะนำ 22 LTS (ตรงกับ image ของเว็บ)
+* Git
+
+### 4.2 n8n (โฟลเดอร์ราก)
+```bash
+npm install          # ติดตั้ง n8n 2.8.4 ตาม package.json (ไม่ต้อง install -g)
+cp .env.example .env # ใส่ N8N_ENCRYPTION_KEY
+npm start            # = n8n start → http://localhost:5678
+```
+Import เฉพาะ workflow ที่ใช้งานจริง (**อย่าใช้** `npm run import:workflows` เพราะจะ import ไฟล์ `UNUSED_` ด้วย):
+```bash
+npx n8n import:workflow --input=./workflows/AutoMailOutbound.json
+npx n8n import:workflow --input=./workflows/R3pXov64UiK0AkDL.json
+```
+
+### 4.3 เว็บ (sheets-app) — 2 terminal
+```bash
+# terminal 1: API
+cd sheets-app/server
+cp .env.example .env   # คง PORT=3001 ไว้
+npm install
+npm run dev            # node --watch index.js → http://localhost:3001
+
+# terminal 2: หน้าเว็บ
+cd sheets-app/client
+npm install
+npm run dev            # Vite → http://localhost:3000 (proxy /api → http://localhost:3001)
+```
+> [!IMPORTANT]
+> Vite proxy ชี้ไป **พอร์ต 3001** (`sheets-app/client/vite.config.js`) ดังนั้นตอนพัฒนา `PORT` ใน `sheets-app/server/.env` ต้องเป็น `3001` ถ้าไม่ตั้ง server จะใช้ 5000 แล้วหน้าเว็บเรียก API ไม่ได้
+>
+> ตัวแปร `SHEET_NAME` ใน `.env.example` ไม่ถูกใช้ใน code แล้ว (ชื่อชีตถูกกำหนดตายตัวใน `googleSheets.js`)
+
+ทดสอบรูปแบบเว็บแบบเดียวกับ production บนเครื่อง: `cd sheets-app/client && npm run build` แล้วรัน server ด้วย `STATIC_DIR=../client/dist` จะได้ทั้งหน้าเว็บและ API ที่พอร์ตเดียว
+
+### 4.4 Export workflow ก่อน commit
+```powershell
+.\scripts\export-workflows.ps1      # Windows
+./scripts/export-workflows.sh       # Linux / macOS / Git Bash
+```
+`--backup` จะ export **ทุก** workflow ในเครื่องเป็น `<ID>.json` — commit เฉพาะ `AutoMailOutbound.json` และ `R3pXov64UiK0AkDL.json` ที่เปลี่ยนจริง ถ้าเพิ่ม workflow ใหม่ที่ต้องขึ้น production ต้องเพิ่มชื่อไฟล์ในบรรทัด `COPY` ของ `Dockerfile` ด้วย
+
+---
+
+## 5. Credentials และกุญแจเข้ารหัส
+
+> [!WARNING]
+> ห้าม commit `.env`, `sheets-app/server/.env`, `credentials.json` ขึ้น Git (อยู่ใน `.gitignore` แล้ว) — `.dockerignore` ที่รากส่งเฉพาะ `workflows/` เข้า build context และ `sheets-app/.dockerignore` กัน `server/.env` ไม่ให้เข้า image
+
+* **`N8N_ENCRYPTION_KEY`:** n8n ใช้เข้ารหัส credential ทุกตัว ย้ายเครื่องแล้วจะใช้ `credentials.json` เดิมได้ต่อเมื่อใช้ key เดียวกันเท่านั้น (ส่งมอบให้ลูกค้า = สร้าง key และ credential ใหม่ ดู CUSTOMER_HANDOVER_CHECKLIST)
+* **สำรอง / กู้คืน credential:**
+  ```bash
+  docker exec -u node n8n_auto_email n8n export:credentials --all --output=/files/credentials.json   # ได้ไฟล์ที่ ./local-files/
+  docker exec -u node n8n_auto_email n8n import:credentials --input=/files/credentials.json
   ```
+* **สำรองข้อมูล n8n ทั้งหมด:** หยุด container แล้ว copy โฟลเดอร์ `n8n_data/` (SQLite ภายในของ n8n + config)
 
 ---
 
-## 4. การจัดการฐานข้อมูล (SQLite vs n8n Data Table)
+## 6. ตัวแปร Environment ทั้งหมด
 
-### ทางเลือกที่ 1: SQLite Database (`n8n_data/automail.sqlite`)
-* **จุดเด่น:** รวดเร็วระดับ Millisecond, รองรับปริมาณข้อมูลสูง, Query ได้อิสระผ่าน SQL
-* **ที่เก็บไฟล์:**
-  * Local Windows: `E:/GitHub/n8n_sandbox/n8n_data/automail.sqlite`
-  * Docker: `/home/node/.n8n/automail.sqlite`
-
-### ทางเลือกที่ 2: n8n Built-in Data Table
-* **จุดเด่น:** ใช้งานง่ายผ่านหน้าเว็บ n8n โดยตรง ไม่ต้องพึ่งพาไดรเวอร์ฐานข้อมูลภายนอก เหมาะสำหรับแสดงผลในทีม
-* **การนำไปใช้:** ใช้ Node `n8n-nodes-base.dataTable` เพื่อ Read/Insert/Update แถว
-
----
-
-## 5. ปัญหาที่พบบ่อยและวิธีแก้ไข (Troubleshooting)
-
-### ❓ 1. เจอปัญหา `Unrecognized node type: n8n-nodes-base.sqlite`
-* **สาเหตุ:** n8n เวอร์ชันใหม่บางเวอร์ชัน (เช่น 2.x) ปิดการใช้งาน Node SQLite เริ่มต้นเพื่อความปลอดภัยของระบบภายใน
-* **วิธีแก้ไข:**
-  1. ใช้ **n8n Built-in Data Table** (`n8n-nodes-base.dataTable`) แทน ซึ่งทำงานได้เสถียรและแสดงผลบน UI สวยงาม
-  2. หรือติดตั้ง Community Node สำหรับ SQLite เพิ่มเติมผ่านเมนู Settings > Community Nodes
-
-### ❓ 2. เจอปัญหา `The item has no binary field 'attachment_0'`
-* **สาเหตุ:** ใน Node Send Email (SMTP) มีการระบุชื่อไฟล์แนบเป็น `attachment_0` แต่ในอีเมลที่ได้รับมาจริง **ผู้ส่งไม่ได้แนบไฟล์มาด้วย** หรือ Node IMAP ไม่ได้เปิดตัวเลือกดาวน์โหลดไฟล์
-* **วิธีแก้ไข:**
-  * ใน Node **IMAP Trigger**: ตรวจสอบว่าเปิด Option `Download Attachments: ON` และ `Prefix Name: attachment_`
-  * ใน Node **ก่อนหน้า Send Email**: เพิ่ม Logic ตรวจสอบว่ามี Binary หรือไม่ หากไม่มีไฟล์แนบ ไม่ต้องส่งตัวแปร attachment เข้าไป
-
-### ❓ 3. ปัญหา IMAP Trigger อีเมลเดิมซ้ำๆ ไม่รู้จบ (Infinite Loop)
-* **สาเหตุ:** ตั้งค่า `customEmailConfig: ["UNSEEN"]` แต่ช่อง `Post Process Action` ตั้งเป็น `nothing` ทำให้อีเมลฉบับเดิมยังคงสถานะไม่ได้อ่าน พอย้อนกลับมาตรวจใหม่จึงหยิบมาประมวลผลซ้ำ
-* **วิธีแก้ไข:**
-  * ใน Node IMAP ให้เปลี่ยน **`Post Process Action`** เป็น **`Mark as Read` (ทำเครื่องหมายว่าอ่านแล้ว)**
-
-### ❓ 4. `npm install` ล้มเหลวด้วย `gyp ERR! find VS` (isolated-vm) หรือ `EBADENGINE`
-* **สาเหตุ:** n8n รุ่น 1.123.51+ และ 2.9.0+ ต้องใช้ Node 22 ขึ้นไป (ผ่าน `isolated-vm` 6.x) ถ้ารันบน Node 20 npm จะพยายาม compile จาก source แล้วล้มเหลวเพราะไม่มี Visual Studio C++
-* **วิธีแก้ไข:** โปรเจกต์นี้ pin `n8n` เป็น **2.8.4** (รุ่นล่าสุดที่รองรับ Node 20.19+ และยังใช้ได้กับ Node 22/24) ห้ามเปลี่ยนเป็น `^` หรือ `latest` ถ้ายังใช้ Node 20
-  * `overrides` ใน `package.json` (`@zenfs/core`, `utilium`) มีไว้ล็อก dependency ย่อยที่ลอยขึ้นไปรุ่นที่ต้องใช้ Node 22 ห้ามลบ
-  * เมื่อย้ายไป Node 22 ขึ้นไปทั้งหมดแล้ว สามารถอัปเกรด n8n และลบ `overrides` ได้
+| ตัวแปร | ไฟล์ | ใช้โดย | ค่า default / หมายเหตุ |
+| :--- | :--- | :--- | :--- |
+| `N8N_PORT` | `.env` | compose (พอร์ต host ของ n8n) | `5678` |
+| `N8N_HOST`, `N8N_PROTOCOL` | `.env` | n8n | `localhost`, `http` |
+| `WEBHOOK_URL` | `.env` | n8n (สร้าง production URL ของ webhook) | `http://localhost:5678/` |
+| `GENERIC_TIMEZONE`, `TZ` | `.env` | n8n (เวลาของ Schedule Trigger) | `Asia/Bangkok` |
+| `N8N_ENCRYPTION_KEY` | `.env` / Jenkins Credential | n8n | **บังคับ** คงค่าเดิมทุก deploy |
+| `WEB_PORT` | `.env` | compose (พอร์ต host ของเว็บ) | `5000` |
+| `PORT` | `sheets-app/server/.env` | Express | Docker บังคับ `5000`; local dev ใช้ `3001`; ไม่ตั้ง = `5000` |
+| `SPREADSHEET_ID` | `sheets-app/server/.env` | Express | ไม่มี = Demo Mode |
+| `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_PRIVATE_KEY` | `sheets-app/server/.env` | Express (Sheets + Drive API) | ไม่มี = Demo Mode |
+| `IMAP_HOST`, `IMAP_PORT` | `sheets-app/server/.env` | Express (`mailbox.js`) | `imap.gmail.com`, `993` |
+| `IMAP_USER`, `IMAP_PASSWORD` | `sheets-app/server/.env` | Express (เปิดไฟล์แนบ) | ไม่มี = เปิดไฟล์แนบไม่ได้ |
+| `STATIC_DIR` | (ไม่บังคับ) | Express | `server/public` (ใน image คือหน้าเว็บที่ build แล้ว) |
 
 ---
 
-## 6. รวมคำสั่ง CLI สำคัญ (Cheat Sheet)
+## 7. ปัญหาที่พบบ่อยและวิธีแก้ไข
 
-| การทำงาน | คำสั่ง (Command) |
+### ❓ 1. หน้าเว็บ dev ขึ้น error เรียก `/api` ไม่ได้ (ECONNREFUSED)
+* **สาเหตุ:** server ไม่ได้รันที่พอร์ต 3001 (เช่นตั้ง `PORT=5000` ตามคู่มือเก่า)
+* **วิธีแก้:** ตั้ง `PORT=3001` ใน `sheets-app/server/.env` แล้วรีสตาร์ท server
+
+### ❓ 2. เว็บใน Docker ขึ้น Demo Mode
+* **สาเหตุ:** ไม่มี `sheets-app/server/.env` บน host หรือค่า Service Account ผิด (มักเป็น `\n` ใน `GOOGLE_PRIVATE_KEY` หาย)
+* **วิธีแก้:** สร้างไฟล์ตามหัวข้อ 2.2 แล้ว `docker compose up -d web` ตรวจด้วย `curl http://localhost:5000/api/status`
+
+### ❓ 3. ปุ่ม "ส่งต่ออีกครั้ง" บนเว็บไม่ทำงาน
+* **สาเหตุ:** `n8n_webhook_url` ในชีต `config` ชี้ `localhost` (ภายใน container `web` คือตัวมันเอง) หรือ workflow 02 ยังไม่ Active (webhook production ใช้ได้เฉพาะ workflow ที่ Active)
+* **วิธีแก้:** ตั้ง `http://n8n:5678/webhook/re-forward` และเปิด Active workflow 02
+
+### ❓ 4. เปิด n8n ผ่าน `http://<IP>` แล้ว login ไม่ได้ (secure cookie)
+* **สาเหตุ:** n8n ตั้ง secure cookie เป็นค่าเริ่มต้น ใช้ได้เฉพาะ HTTPS หรือ localhost
+* **วิธีแก้:** ทำ HTTPS (reverse proxy) ซึ่งแนะนำ หรือชั่วคราวเพิ่ม `N8N_SECURE_COOKIE=false` ใน `.env`
+
+### ❓ 5. Import workflow แล้วได้ workflow เก่าปนมา / มี SQLite / Data Table node
+* **สาเหตุ:** import ทั้งโฟลเดอร์ `./workflows/` ซึ่งมีไฟล์ `UNUSED_*` (เวอร์ชันเก่า ต้องใช้ SQLite node ที่ n8n 2.x ปิดไว้ และ path `E:/GitHub/...`)
+* **วิธีแก้:** archive/ลบ workflow เก่าใน UI แล้ว import เฉพาะ 2 ไฟล์ตามหัวข้อ 4.2 — `scripts/init-sqlite.js` และฐาน `n8n_data/automail.sqlite` เป็นของระบบเก่า ไม่จำเป็นต่อ workflow ปัจจุบัน
+
+### ❓ 6. `npm install` ล้มเหลวด้วย `gyp ERR! find VS` (isolated-vm) หรือ `EBADENGINE`
+* **สาเหตุ:** n8n 1.123.51+ และ 2.9.0+ ต้องใช้ Node 22 ขึ้นไป บน Node 20 npm จะ compile `isolated-vm` จาก source แล้วล้มเหลว
+* **วิธีแก้:** โปรเจกต์ pin `n8n` เป็น **2.8.4** (ทั้ง `package.json` และ `Dockerfile`) ห้ามเปลี่ยนเป็น `^` / `latest` ถ้ายังใช้ Node 20 และห้ามลบ `overrides` (`@zenfs/core`, `utilium`) จนกว่าจะย้ายไป Node 22+ ทั้งหมด
+
+### ❓ 7. IMAP Trigger ดึงอีเมลเดิมซ้ำ
+* **สาเหตุ:** อ่านด้วย `UNSEEN` แต่ Post Process Action ไม่ใช่ Mark as Read
+* **วิธีแก้:** ใน node `Listener: IMAP Email Trigger` ตรวจว่า Action = **Mark as Read** (workflow 02 ยังกันซ้ำอีกชั้นด้วย Message-ID ที่อยู่ใน `Email_Logs` แล้ว)
+
+### ❓ 8. `The item has no binary field 'attachment_0'`
+* **สาเหตุ:** node ส่งอีเมลอ้างถึงไฟล์แนบ แต่อีเมลขาเข้าไม่มีไฟล์แนบ
+* **วิธีแก้:** workflow 02 ปัจจุบันส่งชื่อไฟล์แนบจาก `attach_names` ที่คำนวณจาก binary จริงแล้ว ถ้ายังเจอแปลว่ากำลังใช้ workflow `UNUSED_` อยู่
+
+---
+
+## 8. รวมคำสั่งสำคัญ (Cheat Sheet)
+
+| การทำงาน | คำสั่ง |
 | :--- | :--- |
-| **เริ่มรัน n8n ในเครื่อง** | `n8n start` |
-| **สร้างตาราง SQLite** | `node --experimental-sqlite ./scripts/init-sqlite.js` |
-| **Export Workflows ลงโฟลเดอร์** | `.\scripts\export-workflows.ps1` |
-| **Import Workflows เข้า n8n** | `n8n import:workflow --separate --input=./workflows/` |
-| **Export Credentials ทั้งหมด** | `n8n export:credentials --all --output=./credentials.json` |
-| **Import Credentials เข้า n8n** | `n8n import:credentials --input=./credentials.json` |
-| **ดูรายชื่อ Workflows ในระบบ** | `n8n list:workflow` |
-| **Deploy บน Docker Server** | `docker compose up -d --build` |
-
-### Docker (docker-compose.yml)
-* **service `n8n`** (`Dockerfile` ที่โฟลเดอร์ราก): n8n 2.8.4 (pin ตรงกับที่ใช้พัฒนา เปลี่ยนได้ด้วย build arg `N8N_VERSION`) พร้อม workflow ที่ใช้งานจริง 2 ไฟล์ใน `/home/node/workflows` ค่าอ่านจาก `.env` ที่โฟลเดอร์ราก (`N8N_ENCRYPTION_KEY`, `WEBHOOK_URL` ฯลฯ ดู `.env.example`)
-* **service `web`** (`sheets-app/Dockerfile`): build หน้าเว็บด้วย Vite แล้วให้ server Express เสิร์ฟทั้งหน้าเว็บและ `/api` ที่พอร์ต 5000 (`WEB_PORT`) ค่าลับอ่านจาก `sheets-app/server/.env` (ดู `sheets-app/server/.env.example`)
-* ในชีต `config` ตั้ง `n8n_webhook_url` เป็น `http://n8n:5678/webhook/re-forward` เพื่อให้เว็บเรียก n8n ภายใน network ของ compose
-* `.dockerignore` ที่โฟลเดอร์รากส่งเฉพาะ `workflows/` เข้า build context (`node_modules` ที่รากมีขนาดหลาย GB)
-* workflow ทั้งสองมี id คงที่ (`AutoMailOutbound`, `R3pXov64UiK0AkDL`) Jenkins import ซ้ำทุก deploy จะอัปเดต workflow เดิม แต่ workflow ที่ import ใหม่จะยังปิดอยู่ ต้องเปิด Active หรือ publish เองครั้งแรก
+| Deploy / redeploy ทั้งระบบ | `docker compose up -d --build` |
+| Import workflow ใน container | `docker exec -u node n8n_auto_email n8n import:workflow --separate --input=/home/node/workflows/` |
+| รีสตาร์ท n8n | `docker restart n8n_auto_email` |
+| ดู log | `docker logs -f n8n_auto_email` / `docker logs -f automail_web` |
+| ตรวจสถานะเว็บ | `curl http://localhost:5000/api/status` |
+| ดูรายชื่อ workflow | `docker exec -u node n8n_auto_email n8n list:workflow` |
+| เปิด Active workflow | `docker exec -u node n8n_auto_email n8n publish:workflow --id=<WORKFLOW_ID>` |
+| รัน n8n บนเครื่อง | `npm start` (หรือ `npm run dev` = `--tunnel`) |
+| Export workflow (Windows) | `.\scripts\export-workflows.ps1` |
+| Export credential | `n8n export:credentials --all --output=./credentials.json` |
+| Import credential | `n8n import:credentials --input=./credentials.json` |

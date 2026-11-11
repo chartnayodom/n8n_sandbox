@@ -35,7 +35,7 @@ git push origin main
 
 ```mermaid
 flowchart TD
-    subgraph ClientLayer ["1. Frontend Client (Port 3000)"]
+    subgraph ClientLayer ["1. Frontend Client (dev: Vite 3000 / Docker: เสิร์ฟจาก server 5000)"]
         UI["React 19 + Tailwind v4 + Vite"]
         LoginUI["A. Login (USER_ACCESS + Session)"]
         DashUI["1. Dashboard (4 Metric Cards)"]
@@ -46,7 +46,7 @@ flowchart TD
         SetUI["7. Settings & 8. Activity Logs"]
     end
 
-    subgraph ServerLayer ["2. Backend API (Port 5000)"]
+    subgraph ServerLayer ["2. Backend API (dev: 3001 / Docker: 5000)"]
         API["Node.js Express Server"]
         AuthService["Session + Role Check (config sheet)"]
         SheetsService["Google Sheets API v4 Handler"]
@@ -139,18 +139,19 @@ flowchart TD
   - **โหมดทดสอบ:** ตั้ง `test_forward_email` ใน `Global Config` (และ `Re-forward Config` สำหรับ Flow B) ทุกฉบับจะถูกส่งไปอีเมลนั้นแทนบริษัทประกัน และ subject ขึ้นต้นด้วย `[TEST]` ปล่อยว่าง = ส่งไป `insurance_email` จริง (ปัจจุบันในชีต `config` เป็นค่าตัวอย่าง)
   - ค่าใน `config`: `n8n_webhook_url` ต้องชี้ production URL ของ webhook นี้ (ตอนนี้เป็น `http://localhost:5678/webhook/re-forward` ใช้ได้เมื่อ workflow เปิด Active และเว็บเรียกจากเครื่องที่เข้าถึง n8n ได้)
 - workflow 01 เลิกเขียน n8n Data Table `email_log` แล้ว (workflow 02 ใหม่ใช้ `Email_Logs` แทน)
-- เวิร์กโฟลว์เวอร์ชันก่อนหน้าอื่นๆ ถูกจัดเก็บอยู่ในโฟลเดอร์ `workflows/` ทั้งหมด
+- เวิร์กโฟลว์เวอร์ชันก่อนหน้าเก็บไว้ในโฟลเดอร์ `workflows/` โดยขึ้นต้นชื่อไฟล์ด้วย `UNUSED_` ห้าม import เข้า production (`Dockerfile` คัดลอกเฉพาะ 2 ไฟล์ข้างบน)
+- เมื่อรันด้วย Docker Compose ให้ตั้ง `n8n_webhook_url` = `http://n8n:5678/webhook/re-forward` (ดู `SETUP_AND_MAINTENANCE_GUIDE.md` หัวข้อ 2.4)
 
 ---
 
 ## 💻 4. ขั้นตอนการติดตั้งบนเครื่อง PC เครื่องใหม่ (New PC Setup Guide)
 
-เมื่อย้ายไปยังเครื่องใหม่ ให้ปฏิบัติตามขั้นตอนนี้ตามลำดับ:
+> คู่มือ deploy ฉบับเต็ม (Docker Compose, Jenkins, ตัวแปร environment ทั้งหมด) อยู่ที่ [SETUP_AND_MAINTENANCE_GUIDE.md](../SETUP_AND_MAINTENANCE_GUIDE.md) หัวข้อนี้สรุปเฉพาะการรันเพื่อพัฒนาต่อ
 
 ### ขั้นตอนที่ 1: เตรียมสภาพแวดล้อม (Prerequisites)
 1. ติดตั้ง **Git**: [git-scm.com](https://git-scm.com/)
-2. ติดตั้ง **Node.js**: แนะนำเวอร์ชัน **20.x หรือ 22.x LTS** (เช็คด้วย `node -v` และ `npm -v`)
-3. ติดตั้ง **Docker Desktop** (กรณีต้องการรัน n8n ผ่าน Docker Compose)
+2. ติดตั้ง **Node.js 20.19 – 24.x** (แนะนำ 22 LTS) เช็คด้วย `node -v` และ `npm -v`
+3. ติดตั้ง **Docker Desktop** (กรณีต้องการรันทั้งระบบผ่าน Docker Compose)
 
 ### ขั้นตอนที่ 2: Clone โค้ดจาก Git ลงเครื่องใหม่
 ```bash
@@ -159,40 +160,39 @@ cd n8n_sandbox
 ```
 
 ### ขั้นตอนที่ 3: กู้คืนไฟล์ Environment (`.env`)
-1. เข้าไปที่โฟลเดอร์ `sheets-app/server/`
-2. สร้างไฟล์ชื่อ `.env` (คัดลอกจากของเดิมที่คุณสำรองไว้ หรือดูตัวอย่างใน `.env.example`)
+1. `sheets-app/server/.env`: คัดลอกของเดิมที่สำรองไว้ หรือคัดลอกจาก `sheets-app/server/.env.example` แล้วกรอกค่า
 ```env
-PORT=5000
-SPREADSHEET_ID=12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo
-SHEET_NAME=Master_Data
-GOOGLE_SERVICE_ACCOUNT_EMAIL=n8n-sheet-bot@n8n-test-511914.iam.gserviceaccount.com
+PORT=3001
+SPREADSHEET_ID=<Spreadsheet ID>
+GOOGLE_SERVICE_ACCOUNT_EMAIL=<service-account>@<project>.iam.gserviceaccount.com
 GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+IMAP_HOST=imap.gmail.com
+IMAP_PORT=993
+IMAP_USER=<กล่องจดหมายที่ workflow 02 อ่าน>
+IMAP_PASSWORD=<App Password>
 ```
+   * `PORT` ต้องเป็น `3001` ตอนพัฒนา เพราะ Vite proxy `/api` ไปที่ `http://localhost:3001` (ใน Docker ถูกบังคับเป็น 5000 อยู่แล้ว)
+   * `SHEET_NAME` ไม่ถูกใช้ใน code แล้ว ไม่ต้องใส่
+2. `.env` ที่โฟลเดอร์ราก (สำหรับ n8n): คัดลอกจาก `.env.example` แล้วใส่ `N8N_ENCRYPTION_KEY` (ค่าเดิมถ้าจะใช้ `credentials.json` เดิม)
 
 ### ขั้นตอนที่ 4: ติดตั้ง Dependencies
-เปิด Terminal ในโฟลเดอร์โปรเจกต์:
-
 ```bash
-# 1. ติดตั้ง Dependencies ของ Backend Server
-cd sheets-app/server
-npm install
-
-# 2. ติดตั้ง Dependencies ของ Frontend Client
-cd ../client
-npm install
+npm install                                  # n8n 2.8.4 ที่โฟลเดอร์ราก
+npm --prefix sheets-app/server install       # Backend
+npm --prefix sheets-app/client install       # Frontend
 ```
 
 ### ขั้นตอนที่ 5: เริ่มต้นรันระบบเว็บ (Web Application)
-เปิด Terminal 2 หน้าต่าง (หรือรันแยกแท็บ):
+เปิด Terminal 2 หน้าต่าง:
 
-- **หน้าต่างที่ 1: รัน Backend API (Port 5000)**
+- **หน้าต่างที่ 1: Backend API (Port 3001)**
   ```bash
   cd sheets-app/server
-  npm start
+  npm run dev      # หรือ npm start
   ```
-  *(จะขึ้นข้อความ `🚀 AutoMail Insurance Backend running on http://localhost:5000` และ `📡 Google Sheets Config Status: LIVE`)*
+  *(จะขึ้น `🚀 AutoMail Insurance Backend running on http://localhost:3001` และ `📡 Google Sheets Config Status: LIVE ...` ถ้าเป็น `DEMO MODE` แปลว่าค่า Google ใน .env ยังไม่ครบ)*
 
-- **หน้าต่างที่ 2: รัน Frontend Client (Port 3000)**
+- **หน้าต่างที่ 2: Frontend Client (Port 3000)**
   ```bash
   cd sheets-app/client
   npm run dev
@@ -203,21 +203,24 @@ npm install
 
 ## ⚙️ 5. การเปิดใช้งาน n8n บนเครื่องใหม่
 
-### ทางเลือก A: รันผ่าน Local npm (ง่ายและเร็วที่สุด)
+### ทางเลือก A: รันผ่าน Local npm
 ```bash
-npx n8n
-# หรือติดตั้งแบบ global: npm install -g n8n แล้วรัน: n8n start
+npm start        # = n8n start (ใช้ n8n 2.8.4 ที่ติดตั้งในโปรเจกต์)
 ```
-เปิด `http://localhost:5678` จากนั้น Import Workflows จากโฟลเดอร์ `workflows/`:
-- ไปที่หน้า UI n8n > **Workflows** > เมนูมุมขวาบน > **Import from File...**
-- เลือกไฟล์:
-  - `workflows/AutoMailOutbound.json`
-  - `workflows/a14U6Ep5Yxt4eZH1.json`
+เปิด `http://localhost:5678` สร้างบัญชี owner แล้ว import **เฉพาะ** workflow ที่ใช้งานจริง (ไม่ import ไฟล์ `UNUSED_*`):
+```bash
+npx n8n import:workflow --input=./workflows/AutoMailOutbound.json
+npx n8n import:workflow --input=./workflows/R3pXov64UiK0AkDL.json
+```
+หรือใน UI: **Workflows** > เมนูมุมขวาบน > **Import from File...** เลือก 2 ไฟล์ข้างบน
 
-### ทางเลือก B: รันผ่าน Docker Compose
+### ทางเลือก B: รันทั้งระบบผ่าน Docker Compose (n8n + เว็บ)
 ```bash
-docker compose up -d
+docker compose up -d --build
+docker exec -u node n8n_auto_email n8n import:workflow --separate --input=/home/node/workflows/
+docker restart n8n_auto_email
 ```
+n8n อยู่ที่ `http://localhost:5678` เว็บอยู่ที่ `http://localhost:5000` (รายละเอียดดู SETUP_AND_MAINTENANCE_GUIDE.md หัวข้อ 2)
 
 ---
 
@@ -246,29 +249,35 @@ docker compose up -d
 n8n_sandbox/
 ├── docs/                                          # เอกสารสเปกและคู่มือ
 │   ├── flow_specification.md                      # สเปกการทำงานของ n8n Flow
-│   ├── management_web_plan_and_questions.md      # แผนงานและข้อสรุปทั้ง 8 หน้าจอ
+│   ├── management_web_plan_and_questions.md       # แผนงานและข้อสรุปทั้ง 8 หน้าจอ
+│   ├── CUSTOMER_HANDOVER_CHECKLIST.md             # รายการย้ายระบบไปบัญชีของลูกค้า
 │   └── PROJECT_HANDOVER_AND_MIGRATION_GUIDE.md    # [ไฟล์นี้] คู่มือย้ายเครื่องและสรุปสถานะ
 ├── sheets-app/                                    # ระบบเว็บ Management Portal
+│   ├── Dockerfile                                 # build client (Vite) + server (Express) เป็น image เดียว พอร์ต 5000
 │   ├── server/                                    # Node.js Express API Backend
-│   │   ├── .env                                   # [สำคัญ: ต้องสำรองไว้] คีย์ Google API
+│   │   ├── .env                                   # [สำคัญ: ต้องสำรองไว้] คีย์ Google API + IMAP
 │   │   ├── .env.example                           # ตัวอย่างการตั้งค่า Environment
 │   │   ├── googleSheets.js                        # Service เชื่อมต่อ Sheets API & Drive API
-│   │   ├── index.js                               # API Endpoints (Auth, Logs, Config, CRUD)
+│   │   ├── mailbox.js                             # เปิดไฟล์แนบจากกล่องจดหมายผ่าน IMAP ด้วย Message-ID
+│   │   ├── index.js                               # API Endpoints + เสิร์ฟหน้าเว็บที่ build แล้ว (public/)
 │   │   └── package.json
 │   └── client/                                    # React (Vite) Frontend
 │       ├── src/
 │       │   ├── App.jsx                            # โค้ดหลักครบทั้ง 8 หน้าจอ + Simple Editor
 │       │   ├── App.css                            # สไตล์
 │       │   └── index.css                          # Tailwind CSS & Badges
-│       ├── vite.config.js                         # Proxy ไปยัง Backend (Port 5000)
+│       ├── vite.config.js                         # dev server 3000, proxy /api → localhost:3001
 │       └── package.json
 ├── workflows/                                     # ไฟล์ Workflow JSON สำหรับ n8n
-│   ├── 01 - Google Sheets Outbound Email...json   # เวิร์กโฟลว์ส่งอีเมลออก
-│   └── 02 - Inbound Monitor & Auto-Forward...json # เวิร์กโฟลว์ตรวจจับและส่งต่ออีเมล
-├── Dockerfile                                     # Docker image สำหรับ n8n
-├── docker-compose.yml                             # Container orchestration
+│   ├── AutoMailOutbound.json                      # workflow 01: ส่งอีเมลแจ้งเตือน R1/R2
+│   ├── R3pXov64UiK0AkDL.json                      # workflow 02: Inbound Router + webhook re-forward
+│   └── UNUSED_*.json                              # เวอร์ชันเก่า ไม่ใช้งาน
+├── scripts/                                       # export-workflows.(sh|ps1), init-sqlite.js (ระบบเก่า)
+├── Dockerfile                                     # image n8n 2.8.4 + workflow 2 ไฟล์
+├── docker-compose.yml                             # service n8n (5678) + web (5000)
 ├── Jenkinsfile                                    # CI/CD pipeline
-├── GEMINI.md                                      # กฎและ Role ของ AI Coding Agent
+├── SETUP_AND_MAINTENANCE_GUIDE.md                 # คู่มือ deploy และดูแลระบบ
+├── CONTEXT.md                                     # คำศัพท์ของโดเมน
+├── GEMINI.md / AGENTS.md / CLAUDE.md              # กฎและ Role ของ AI Coding Agent
 └── .gitignore                                     # กรองไฟล์ sensitive ไม่ให้ขึ้น Git
 ```
-
