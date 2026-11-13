@@ -1,0 +1,36 @@
+# วางที่ /etc/caddy/sites/automail.caddy (Caddyfile หลัก import sites/*.caddy)
+# ใช้: caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile && systemctl reload caddy
+#
+# AutoMail Insurance - LIVE TEST
+# reverse_proxy ทั้งหมดไป Express (127.0.0.1:5000) ซึ่งเสิร์ฟทั้งหน้าเว็บและ /api
+# ไม่ใส่ CSP / X-Frame-Options DENY ที่ Caddy: บล็อก iframe preview ไฟล์แนบ, รูปในอีเมล และตัวแสดง PDF
+# (Express ใส่ CSP ให้ไฟล์แนบเองที่ sheets-app/server/index.js sendAttachment)
+#
+# ⚠️ ไม่มีด่านกันหน้า login (แอปใช้อีเมลอย่างเดียว ไม่มีรหัสผ่าน) — ใช้ช่วงทดสอบเท่านั้น
+# เปิดด่านกลับ: เอา # ออกจาก block basic_auth แล้วใส่ hash จาก `caddy hash-password`
+automail.myaiaplan.com {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		X-Robots-Tag "noindex, nofollow"
+		-Server
+	}
+
+	# basic_auth {
+	# 	automail <HASH>
+	# }
+
+	reverse_proxy 127.0.0.1:5000
+
+	log {
+		output file /var/log/caddy/automail-access.log {
+			roll_size 20MiB
+			roll_keep 5
+		}
+	}
+}

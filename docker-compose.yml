@@ -7,8 +7,10 @@ services:
     image: custom-n8n-email-automation:latest
     container_name: n8n_auto_email
     restart: always
+    # ผูกกับ 127.0.0.1 เท่านั้น: เข้า editor ผ่าน SSH tunnel (ssh -L 5678:127.0.0.1:5678 ...)
+    # ห้ามเปิด 0.0.0.0 เพราะ n8n รันโค้ดได้ และหน้า owner setup ครั้งแรกให้ใครก็ได้สร้างบัญชี
     ports:
-      - "${N8N_PORT:-5678}:5678"
+      - "127.0.0.1:${N8N_PORT:-5678}:5678"
     env_file:
       - .env
     environment:
@@ -29,8 +31,10 @@ services:
     image: automail-insurance-web:latest
     container_name: automail_web
     restart: always
+    # ผูกกับ 127.0.0.1 เท่านั้น: ภายนอกเข้าผ่าน reverse proxy (Caddy) ห้ามเปิด 0.0.0.0 เพราะ Docker ข้ามกฎ ufw
+    # และ login ของแอปใช้แค่อีเมล (ดู docs/sessions/2026-11-12-vps-setup.md)
     ports:
-      - "${WEB_PORT:-5000}:5000"
+      - "127.0.0.1:${WEB_PORT:-5000}:5000"
     env_file:
       - path: ./sheets-app/server/.env
         required: false

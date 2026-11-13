@@ -1,4 +1,5 @@
 const { google } = require('googleapis');
+const { fetchMailAttachments } = require('./mailbox');
 require('dotenv').config();
 
 // ponytail: activity log อยู่ใน memory (หายเมื่อรีสตาร์ท, ไม่มีแท็บในชีต) ย้ายลงชีตเมื่อต้องการเก็บถาวร
@@ -615,6 +616,15 @@ async function reForwardEmail(id) {
   if (!webhookUrl || !webhookUrl.startsWith('http')) throw new Error('ยังไม่ได้ตั้งค่า n8n Webhook URL (หน้า ตั้งค่าระบบ)');
   if (!config.system.insurance_email) throw new Error('ยังไม่ได้ตั้งค่าอีเมลบริษัทประกัน (หน้า ตั้งค่าระบบ)');
 
+  // ไฟล์แนบเดิมของลูกค้า ดึงจากกล่องจดหมายด้วย Message-ID ครบทุกไฟล์ก่อนสั่งส่ง (ขาดไฟล์ = ไม่ส่ง)
+  // ponytail: ส่งเป็น base64 ใน JSON รวมไฟล์ได้ราว 12MB (n8n รับ payload 16MB) เกินนั้น n8n ตอบ 413 และไม่ส่ง
+  let attachments;
+  try {
+    attachments = await fetchMailAttachments(target.messageId, target.attachments);
+  } catch (err) {
+    throw new Error(`ดึงไฟล์แนบจากอีเมลต้นฉบับไม่ได้ จึงยังไม่ส่งต่อ: ${err.message}`);
+  }
+
   const res = await fetch(webhookUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -624,7 +634,8 @@ async function reForwardEmail(id) {
       recipientEmail: target.recipientEmail,
       subject: target.subject,
       messageId: target.messageId,
-      targetInsuranceEmail: config.system.insurance_email
+      targetInsuranceEmail: config.system.insurance_email,
+      attachments
     })
   });
   if (!res.ok) throw new Error(`n8n webhook ตอบกลับ ${res.status} ${res.statusText}`);

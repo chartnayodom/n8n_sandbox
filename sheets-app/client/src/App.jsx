@@ -2882,6 +2882,7 @@ export default function App() {
                   dangerouslySetInnerHTML={{
                     __html: (templateForm.htmlContent || '')
                       .replace(/{{customerName}}/g, 'คุณสมชาย เจริญสุข')
+                      .replace(/{{insuranceName}}/g, config.system?.insurance_name || 'บริษัทประกัน')
                       .replace(/{{bookingNo}}/g, 'BK-2026-001')
                       .replace(/{{policyExpiry}}/g, '31/12/2026')
                       .replace(/{{daysRemaining}}/g, '172')

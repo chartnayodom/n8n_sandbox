@@ -1,11 +1,5 @@
 {
-  "updatedAt": "2026-11-08T15:59:16.426Z",
-  "createdAt": "2026-11-07T09:44:23.973Z",
-  "id": "R3pXov64UiK0AkDL",
   "name": "02 - AutoMail Inbound Router (Master_Data → Insurance / Needs Review)",
-  "description": null,
-  "active": false,
-  "isArchived": false,
   "nodes": [
     {
       "parameters": {
@@ -316,8 +310,8 @@
         "html": "={{ $json.forward_html }}",
         "options": {
           "appendAttribution": false,
-          "replyTo": "={{ $json.from_email }}",
-          "attachments": "={{ $json.attach_names }}"
+          "attachments": "={{ $json.attach_names }}",
+          "replyTo": "={{ $json.from_email }}"
         }
       },
       "id": "4905f209-e9ec-49b6-ac3e-a041479736d7",
@@ -953,6 +947,12 @@
               "name": "test_forward_email",
               "value": "",
               "type": "string"
+            },
+            {
+              "id": "7f3c1d52-9a4e-4b8e-a1c2-5e6f7a8b9c01",
+              "name": "template_name_forward",
+              "value": "ส่งต่อบริษัทประกัน",
+              "type": "string"
             }
           ]
         },
@@ -1038,14 +1038,14 @@
     },
     {
       "parameters": {
-        "jsCode": "// Re-forward จากปุ่มบนเว็บ: เว็บส่ง { action: 're-forward', logId, ... } มาที่ webhook\n// ปลายทางอ่านจาก config (insurance_email) เสมอ ไม่ใช้ค่าที่มากับ request เพื่อกัน webhook ถูกเรียกให้ส่งเมลไปที่อื่น\n// (เว็บเป็นฝ่ายเพิ่มแถว log ของการ re-forward เอง workflow นี้จึงไม่เขียน Email_Logs ซ้ำ)\nconst cfg = $('Re-forward Config').first().json;\nconst esc = s => String(s ?? '').replace(/[&<>\"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[ch]));\nconst body = $('Webhook: Re-forward').first().json.body || {};\n\nif (body.action !== 're-forward' || !body.logId) throw new Error('คำขอไม่ถูกต้อง: ต้องมี action = re-forward และ logId');\n\nconst sys = {};\nfor (const i of $('Read config (Re-forward)').all()) {\n  const r = i.json;\n  if (String(r.Category || '').trim().toUpperCase() === 'SYSTEM') sys[String(r.Key || '').trim()] = String(r.Value || '').trim();\n}\nconst testTo = String(cfg.test_forward_email || '').trim();\nconst forwardTo = testTo || sys.insurance_email;\nif (!forwardTo) throw new Error('ยังไม่ได้ตั้งค่าอีเมลบริษัทประกัน (config: insurance_email)');\n\nconst row = $('Read Email_Logs (Re-forward)').all().map(i => i.json).find(r => String(r.Log_ID || '').trim() === String(body.logId).trim());\nif (!row) throw new Error(`ไม่พบรายการ ${body.logId} ใน Email_Logs`);\n\nconst original = String(row.Original_Body || '').trim();\nconst note = original\n  ? ''\n  : '<p style=\"color:#b45309;\">รายการนี้ไม่มีเนื้อหาต้นฉบับเก็บไว้ในระบบ (ส่งก่อนเริ่มเก็บเนื้อหา) กรุณาดูต้นฉบับจากกล่องจดหมาย</p>';\n\nconst subject = String(row.Subject || '');\nreturn [{\n  json: {\n    forward_to: forwardTo,\n    forward_subject: (testTo ? '[TEST] ' : '') + (subject.toLowerCase().startsWith('fwd:') ? subject : `Fwd: ${subject}`),\n    forward_html: `\n<div style=\"font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #222;\">\n  ${sys.insurance_name ? `<p>เรียน ${esc(sys.insurance_name)}</p>` : ''}\n  <div style=\"background-color: #e8f0fe; border-left: 4px solid #1a73e8; padding: 12px 16px; margin-bottom: 16px;\">\n    <strong>[AutoMail] ส่งต่ออีกครั้ง (Re-forward)</strong>${testTo ? ' <span style=\"color:#b45309;\">(โหมดทดสอบ)</span>' : ''}\n  </div>\n  <div style=\"background-color: #f8f9fa; border: 1px solid #ddd; padding: 12px 16px; margin-bottom: 16px; font-size: 13px;\">\n    <p style=\"margin: 2px 0;\"><strong>ลูกค้า:</strong> ${esc(row.Customer_Name)} (${esc(row.Recipient_Email)})</p>\n    <p style=\"margin: 2px 0;\"><strong>รับเมื่อ:</strong> ${esc(row.Sent_Timestamp)}</p>\n    <p style=\"margin: 2px 0;\"><strong>Subject:</strong> ${esc(subject)}</p>\n    <p style=\"margin: 2px 0; color:#64748b;\">ไฟล์แนบเดิมไม่ได้ถูกส่งซ้ำ</p>\n  </div>\n  ${note}\n  <div>${original}</div>\n</div>`\n  }\n}];"
+        "jsCode": "// Re-forward จากปุ่มบนเว็บ: เว็บส่ง { action: 're-forward', logId, attachments: [{ name, mimeType, data(base64) }] } มาที่ webhook\n// ปลายทางอ่านจาก config (insurance_email) เสมอ ไม่ใช้ค่าที่มากับ request เพื่อกัน webhook ถูกเรียกให้ส่งเมลไปที่อื่น\n// เนื้อหา = Template \"ส่งต่อบริษัทประกัน\" (ชื่อใน Re-forward Config: template_name_forward) + ข้อความเดิมของลูกค้าต่อท้าย\n// ไฟล์แนบ = ไฟล์เดิมของลูกค้าที่เว็บดึงจากกล่องจดหมาย ต้องครบตามคอลัมน์ Attachments ของ Email_Logs ไม่ครบ = ไม่ส่ง\n// (เว็บเป็นฝ่ายเพิ่มแถว log ของการ re-forward เอง workflow นี้จึงไม่เขียน Email_Logs ซ้ำ)\nconst cfg = $('Re-forward Config').first().json;\nconst esc = s => String(s ?? '').replace(/[&<>\"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;' }[ch]));\nconst body = $('Webhook: Re-forward').first().json.body || {};\n\nif (body.action !== 're-forward' || !body.logId) throw new Error('คำขอไม่ถูกต้อง: ต้องมี action = re-forward และ logId');\n\nconst sys = {};\nfor (const i of $('Read config (Re-forward)').all()) {\n  const r = i.json;\n  if (String(r.Category || '').trim().toUpperCase() === 'SYSTEM') sys[String(r.Key || '').trim()] = String(r.Value || '').trim();\n}\nconst testTo = String(cfg.test_forward_email || '').trim();\nconst forwardTo = testTo || sys.insurance_email;\nif (!forwardTo) throw new Error('ยังไม่ได้ตั้งค่าอีเมลบริษัทประกัน (config: insurance_email)');\n\nconst row = $('Read Email_Logs (Re-forward)').all().map(i => i.json).find(r => String(r.Log_ID || '').trim() === String(body.logId).trim());\nif (!row) throw new Error(`ไม่พบรายการ ${body.logId} ใน Email_Logs`);\n\n// Template ส่งต่อบริษัทประกัน (หัวคอลัมน์: Template_ID, Template_Name, Subject, Recipient_Type, Status, Description, HTML_Content)\nconst tplName = String(cfg.template_name_forward || '').trim();\nconst tpl = $('Read Templates (Re-forward)').all().map(i => i.json).find(r => String(r.Template_Name || '').trim() === tplName);\nif (!tpl) throw new Error(`ชีต Templates: ไม่พบ template ชื่อ \"${tplName}\"`);\nif (String(tpl.Status || 'Active').trim() !== 'Active') throw new Error(`ชีต Templates: template \"${tplName}\" ไม่ได้เป็น Active`);\nif (!tpl.Subject || !tpl.HTML_Content) throw new Error(`ชีต Templates: template \"${tplName}\" ไม่มี Subject หรือ HTML_Content`);\n\n// ไฟล์แนบ: ต้องได้ครบตามที่บันทึกไว้ใน Email_Logs\nlet expected = [];\ntry { expected = JSON.parse(row.Attachments || '[]'); } catch (e) { /* ไม่มีรายการไฟล์ */ }\nconst files = Array.isArray(body.attachments) ? body.attachments.filter(f => f && f.data) : [];\nif (Array.isArray(expected) && files.length < expected.length) {\n  throw new Error(`ไฟล์แนบไม่ครบ (ได้ ${files.length} จาก ${expected.length} ไฟล์) จึงไม่ส่งต่อ`);\n}\nconst binary = {};\nfiles.forEach((f, i) => {\n  binary[`attachment_${i}`] = { data: f.data, mimeType: f.mimeType || 'application/octet-stream', fileName: f.name || `attachment_${i}` };\n});\n\n// ข้อมูลลูกค้าจาก Master_Data (หาด้วย Customer_ID ก่อน ไม่เจอค่อยหาด้วยอีเมล)\nconst master = $('Read Master_Data (Re-forward)').all().map(i => i.json);\nconst cust = master.find(r => row.Customer_ID && String(r.ID) === String(row.Customer_ID))\n  || master.find(r => String(r.Email || '').trim().toLowerCase() === String(row.Recipient_Email || '').trim().toLowerCase())\n  || {};\n\nconst policyNo = cust.Policy_No || '-';\nconst vars = {\n  customerName: cust.Customer_Name || row.Customer_Name || row.Recipient_Email,\n  insuranceName: sys.insurance_name || '', // ชื่อ Forward Insurer (config: insurance_name)\n  policyNo,\n  bookingNo: policyNo,\n  policyExpiry: cust.Expiry_Date || '-',\n  insuranceType: cust.Insurance_Type || '-',\n  driveLinks: files.map(f => f.name).join(', ') || '-',\n  referenceId: row.Message_ID || ''\n};\nconst fill = (text, escape) => String(text).replace(/\\{\\{\\s*(\\w+)\\s*\\}\\}/g, (_, k) => {\n  const v = String(vars[k] ?? '');\n  return escape ? esc(v) : v;\n});\n\n// ข้อความเดิมของลูกค้า ต่อท้าย template\nconst original = String(row.Original_Body || '').trim();\nconst quoted = `\n<div style=\"max-width:600px; margin:16px auto; padding:16px; background-color:#FFFFFF; border:1px solid #ddd; font-family:Arial, sans-serif; font-size:14px; line-height:1.6; color:#222;\">\n  ${testTo ? '<p style=\"margin:0 0 8px; color:#b45309;\"><strong>(โหมดทดสอบ)</strong></p>' : ''}\n  <p style=\"margin:0 0 8px; font-weight:bold;\">---------- ข้อความจากลูกค้า ----------</p>\n  <p style=\"margin:2px 0; font-size:13px;\"><strong>From:</strong> ${esc(row.Customer_Name)} (${esc(row.Recipient_Email)})</p>\n  <p style=\"margin:2px 0; font-size:13px;\"><strong>รับเมื่อ:</strong> ${esc(row.Sent_Timestamp)}</p>\n  <p style=\"margin:2px 0 12px; font-size:13px;\"><strong>Subject:</strong> ${esc(row.Subject)}</p>\n  ${original ? `<div>${original}</div>` : '<p style=\"color:#b45309;\">รายการนี้ไม่มีเนื้อหาต้นฉบับเก็บไว้ในระบบ (ส่งก่อนเริ่มเก็บเนื้อหา) กรุณาดูต้นฉบับจากกล่องจดหมาย</p>'}\n</div>`;\nconst html = fill(tpl.HTML_Content, true);\nconst forwardHtml = html.includes('</body>') ? html.replace('</body>', () => quoted + '</body>') : html + quoted;\n\nreturn [{\n  json: {\n    forward_to: forwardTo,\n    forward_subject: (testTo ? '[TEST] ' : '') + fill(tpl.Subject, false),\n    forward_html: forwardHtml,\n    attach_names: Object.keys(binary).join(',')\n  },\n  binary\n}];\n"
       },
       "id": "8d36fcf8-2c1a-4ae5-b012-c2be9cb727ed",
       "name": "Build Re-forward",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -960,
+        -480,
         960
       ]
     },
@@ -1056,7 +1056,8 @@
         "subject": "={{ $json.forward_subject }}",
         "html": "={{ $json.forward_html }}",
         "options": {
-          "appendAttribution": false
+          "appendAttribution": false,
+          "attachments": "={{ $json.attach_names }}"
         }
       },
       "id": "80654260-f45e-4178-8395-445d790dd815",
@@ -1064,7 +1065,7 @@
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
       "position": [
-        -720,
+        -240,
         960
       ],
       "webhookId": "43c8a502-6d17-42d2-b877-4068b1dbb453",
@@ -1074,8 +1075,77 @@
           "name": "SMTP account"
         }
       }
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "documentId": {
+          "__rl": true,
+          "value": "12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo",
+          "mode": "list",
+          "cachedResultName": "automail_test",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Templates",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "b6a1e0c4-3d2f-4c7a-9e81-0f2a3b4c5d61",
+      "name": "Read Templates (Re-forward)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -960,
+        960
+      ],
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleApi": {
+          "id": "mqkHhADlTD99e0LW",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "documentId": {
+          "__rl": true,
+          "value": "12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo",
+          "mode": "list",
+          "cachedResultName": "automail_test",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/12S24DnEVXj72JDarLex5Z6cEo7zla4DEULaCfEW6QWo/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Master_Data",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "c7b2f1d5-4e3a-4d8b-8f92-1a3b4c5d6e72",
+      "name": "Read Master_Data (Re-forward)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -720,
+        960
+      ],
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleApi": {
+          "id": "mqkHhADlTD99e0LW",
+          "name": "Google Service Account account"
+        }
+      }
     }
   ],
+  "pinData": {},
   "connections": {
     "Listener: IMAP Email Trigger": {
       "main": [
@@ -1278,7 +1348,7 @@
       "main": [
         [
           {
-            "node": "Build Re-forward",
+            "node": "Read Templates (Re-forward)",
             "type": "main",
             "index": 0
           }
@@ -1295,40 +1365,41 @@
           }
         ]
       ]
+    },
+    "Read Templates (Re-forward)": {
+      "main": [
+        [
+          {
+            "node": "Read Master_Data (Re-forward)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Master_Data (Re-forward)": {
+      "main": [
+        [
+          {
+            "node": "Build Re-forward",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
+  "active": true,
   "settings": {
     "executionOrder": "v1",
     "binaryMode": "separate",
     "availableInMCP": false
   },
-  "staticData": null,
+  "versionId": "19da1578-9350-40e1-86ce-6a9ebf87761e",
   "meta": {
-    "templateCredsSetupCompleted": true
+    "templateCredsSetupCompleted": true,
+    "instanceId": "bfd4af59733ea7f4be66ff4b63ea3493ae43ecc50b57df21575bd921c1e358e5"
   },
-  "pinData": {},
-  "versionId": "3c46f19d-44fb-4dba-add2-19f82c627a29",
-  "activeVersionId": null,
-  "versionCounter": 6,
-  "triggerCount": 0,
-  "tags": [],
-  "shared": [
-    {
-      "updatedAt": "2026-11-07T09:44:23.980Z",
-      "createdAt": "2026-11-07T09:44:23.980Z",
-      "role": "workflow:owner",
-      "workflowId": "R3pXov64UiK0AkDL",
-      "projectId": "JrzUmd4x6l6DrnBi",
-      "project": {
-        "updatedAt": "2026-11-02T13:33:13.573Z",
-        "createdAt": "2026-11-02T13:28:32.182Z",
-        "id": "JrzUmd4x6l6DrnBi",
-        "name": "Chartnayodom Wiboonpanich <baipor2545@gmail.com>",
-        "type": "personal",
-        "icon": null,
-        "description": null,
-        "creatorId": "1f1dd28d-d267-4958-a66b-6436e15dec1c"
-      }
-    }
-  ]
+  "id": "R3pXov64UiK0AkDL",
+  "tags": []
 }

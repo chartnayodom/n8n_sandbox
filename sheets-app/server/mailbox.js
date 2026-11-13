@@ -35,15 +35,18 @@ function attachmentParts(node, out = []) {
   return out;
 }
 
-// เปิดไฟล์แนบ 1 ไฟล์: หาตามชื่อไฟล์ก่อน ไม่เจอค่อยใช้ลำดับ
-// คืน stream ของเนื้อไฟล์ (ถอดรหัส base64 แล้ว) และ close() ที่ต้องเรียกเมื่อส่งไฟล์เสร็จ
-async function openMailAttachment(messageId, { index, name }) {
+// เปิดอีเมลตาม Message-ID: คืน uid, รายการไฟล์แนบ และ close() ที่ต้องเรียกเมื่อใช้เสร็จ
+async function openMessage(messageId) {
   const id = String(messageId || '').replace(/[<>]/g, '').trim();
   if (!id) throw httpError(404, 'รายการนี้ไม่มี Message-ID');
 
   const client = new ImapFlow(imapConfig());
   await client.connect();
   let lock;
+  const close = async () => {
+    try { if (lock) lock.release(); } catch { /* ปล่อยแล้ว */ }
+    await client.logout().catch(() => {});
+  };
   try {
     // Gmail: โฟลเดอร์ "All Mail" (special-use \All) รวมอีเมลที่เก็บถาวรแล้ว ชื่อโฟลเดอร์เปลี่ยนตามภาษาบัญชี จึงหาจาก flag
     const boxes = await client.list();
@@ -55,21 +58,51 @@ async function openMailAttachment(messageId, { index, name }) {
     const uid = String(uids[uids.length - 1]);
 
     const msg = await client.fetchOne(uid, { bodyStructure: true }, { uid: true });
-    const parts = attachmentParts(msg && msg.bodyStructure);
-    const target = (name && parts.find(p => p.name === name)) || parts[index];
-    if (!target) throw httpError(404, 'ไม่พบไฟล์แนบนี้ในอีเมล');
-
-    const { content } = await client.download(uid, target.part, { uid: true });
-    const close = async () => {
-      try { lock.release(); } catch { /* ปล่อยแล้ว */ }
-      await client.logout().catch(() => {});
-    };
-    return { name: target.name, mimeType: target.mimeType, stream: content, close };
+    return { client, uid, parts: attachmentParts(msg && msg.bodyStructure), close };
   } catch (err) {
-    if (lock) lock.release();
-    await client.logout().catch(() => {});
+    await close();
     throw err;
   }
 }
 
-module.exports = { openMailAttachment, attachmentParts };
+// หาไฟล์แนบตามชื่อไฟล์ก่อน ไม่เจอค่อยใช้ลำดับ
+const findPart = (parts, { index, name }) => (name && parts.find(p => p.name === name)) || parts[index];
+
+// เปิดไฟล์แนบ 1 ไฟล์: คืน stream ของเนื้อไฟล์ (ถอดรหัส base64 แล้ว) และ close() ที่ต้องเรียกเมื่อส่งไฟล์เสร็จ
+async function openMailAttachment(messageId, { index, name }) {
+  const m = await openMessage(messageId);
+  try {
+    const target = findPart(m.parts, { index, name });
+    if (!target) throw httpError(404, 'ไม่พบไฟล์แนบนี้ในอีเมล');
+    const { content } = await m.client.download(m.uid, target.part, { uid: true });
+    return { name: target.name, mimeType: target.mimeType, stream: content, close: m.close };
+  } catch (err) {
+    await m.close();
+    throw err;
+  }
+}
+
+// ดึงไฟล์แนบทุกไฟล์ตามรายการใน Email_Logs (คอลัมน์ Attachments) เป็น base64 สำหรับ Re-forward
+// ขาดไฟล์ใดไฟล์หนึ่ง = throw ทั้งหมด เพื่อไม่ให้บริษัทประกันได้รับเอกสารไม่ครบ
+async function fetchMailAttachments(messageId, metas) {
+  if (!metas.length) return [];
+  const m = await openMessage(messageId);
+  try {
+    const missing = metas.filter((meta, i) => !findPart(m.parts, { index: meta.index ?? i, name: meta.name }));
+    if (missing.length) throw httpError(404, `ไม่พบไฟล์แนบในอีเมลต้นฉบับ: ${missing.map(x => x.name).join(', ')}`);
+
+    const files = [];
+    for (const [i, meta] of metas.entries()) {
+      const p = findPart(m.parts, { index: meta.index ?? i, name: meta.name });
+      const { content } = await m.client.download(m.uid, p.part, { uid: true });
+      const chunks = [];
+      for await (const c of content) chunks.push(c);
+      files.push({ name: p.name, mimeType: p.mimeType, data: Buffer.concat(chunks).toString('base64') });
+    }
+    return files;
+  } finally {
+    await m.close();
+  }
+}
+
+module.exports = { openMailAttachment, fetchMailAttachments, attachmentParts };

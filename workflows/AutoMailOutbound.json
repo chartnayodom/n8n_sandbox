@@ -1,32 +1,6 @@
 {
-  "updatedAt": "2026-11-08T16:05:30.815Z",
-  "createdAt": "2026-11-08T15:13:13.116Z",
-  "id": "AutoMailOutbound",
   "name": "01 - AutoMail Outbound R1/R2 (v2 Master_Data)",
-  "description": null,
-  "active": false,
-  "isArchived": false,
   "nodes": [
-    {
-      "parameters": {
-        "rule": {
-          "interval": [
-            {
-              "field": "hours",
-              "hoursInterval": 24
-            }
-          ]
-        }
-      },
-      "id": "e4f8d21b-3001-4b1a-9876-000000000001",
-      "name": "Schedule Trigger (Daily)",
-      "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1.2,
-      "position": [
-        -144,
-        304
-      ]
-    },
     {
       "parameters": {},
       "id": "e4f8d21b-3001-4b1a-9876-000000000002",
@@ -36,7 +10,8 @@
       "position": [
         -144,
         144
-      ]
+      ],
+      "disabled": true
     },
     {
       "parameters": {
@@ -930,20 +905,29 @@
         224
       ],
       "id": "2a316004-d2b7-4f8d-8b84-f083ddfc27df"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "id": "e4f8d21b-3001-4b1a-9876-000000000001",
+      "name": "Schedule Trigger (Hourly)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -144,
+        304
+      ]
     }
   ],
+  "pinData": {},
   "connections": {
-    "Schedule Trigger (Daily)": {
-      "main": [
-        [
-          {
-            "node": "Global Config",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Manual Trigger (Test Flow)": {
       "main": [
         [
@@ -1194,8 +1178,20 @@
           }
         ]
       ]
+    },
+    "Schedule Trigger (Hourly)": {
+      "main": [
+        [
+          {
+            "node": "Global Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
+  "active": true,
   "settings": {
     "executionOrder": "v1",
     "binaryMode": "separate",
@@ -1204,34 +1200,11 @@
     "callerPolicy": "workflowsFromSameOwner",
     "availableInMCP": false
   },
-  "staticData": null,
+  "versionId": "d3d556fb-c350-441e-b4e3-48db7fa141de",
   "meta": {
     "templateCredsSetupCompleted": true,
-    "instanceId": "2e633fffb0ea72f35ba674745e8461d60f71e2fc37f19249685deaefdcecb3e2"
+    "instanceId": "bfd4af59733ea7f4be66ff4b63ea3493ae43ecc50b57df21575bd921c1e358e5"
   },
-  "pinData": {},
-  "versionId": "717298a8-6a93-46ed-9e6d-1fef4c7b6116",
-  "activeVersionId": null,
-  "versionCounter": 4,
-  "triggerCount": 0,
-  "tags": [],
-  "shared": [
-    {
-      "updatedAt": "2026-11-08T15:13:13.128Z",
-      "createdAt": "2026-11-08T15:13:13.128Z",
-      "role": "workflow:owner",
-      "workflowId": "AutoMailOutbound",
-      "projectId": "JrzUmd4x6l6DrnBi",
-      "project": {
-        "updatedAt": "2026-11-02T13:33:13.573Z",
-        "createdAt": "2026-11-02T13:28:32.182Z",
-        "id": "JrzUmd4x6l6DrnBi",
-        "name": "Chartnayodom Wiboonpanich <baipor2545@gmail.com>",
-        "type": "personal",
-        "icon": null,
-        "description": null,
-        "creatorId": "1f1dd28d-d267-4958-a66b-6436e15dec1c"
-      }
-    }
-  ]
+  "id": "AutoMailOutbound",
+  "tags": []
 }
