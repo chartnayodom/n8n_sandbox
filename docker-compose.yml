@@ -23,7 +23,8 @@ services:
 
   # เว็บจัดการระบบ (sheets-app): หน้าเว็บ + API ใน container เดียว
   # ค่าลับอ่านจาก sheets-app/server/.env (SPREADSHEET_ID, Service Account, IMAP) ไม่มีไฟล์ก็ยังเริ่มได้แต่จะต่อ Google Sheets ไม่ได้
-  # ชีต config: n8n_webhook_url ควรเป็น http://n8n:5678/webhook/re-forward (เรียกกันภายใน network ของ compose)
+  # webhook re-forward เรียก n8n ภายใน network ของ compose: N8N_WEBHOOK_URL ด้านล่างทับค่า n8n_webhook_url ในชีต config
+  # (ชีตใช้ร่วมกับเครื่อง local ที่ตั้งเป็น localhost ซึ่งใน container จะชี้กลับมาที่ตัวเองแล้ว ECONNREFUSED)
   web:
     build:
       context: ./sheets-app
@@ -40,5 +41,6 @@ services:
         required: false
     environment:
       - PORT=5000
+      - N8N_WEBHOOK_URL=http://n8n:5678/webhook/re-forward
     depends_on:
       - n8n

@@ -611,7 +611,8 @@ async function reForwardEmail(id) {
 
   // 1. Fetch n8n Webhook URL from Config
   const config = await getConfig();
-  const webhookUrl = config.system.n8n_webhook_url;
+  // ชีต config ใช้ร่วมกันหลายเครื่อง (local ใช้ localhost, ใน docker compose ต้องเป็น http://n8n:5678) จึงให้ env ของเครื่องนั้นชนะ
+  const webhookUrl = process.env.N8N_WEBHOOK_URL || config.system.n8n_webhook_url;
 
   if (!webhookUrl || !webhookUrl.startsWith('http')) throw new Error('ยังไม่ได้ตั้งค่า n8n Webhook URL (หน้า ตั้งค่าระบบ)');
   if (!config.system.insurance_email) throw new Error('ยังไม่ได้ตั้งค่าอีเมลบริษัทประกัน (หน้า ตั้งค่าระบบ)');
